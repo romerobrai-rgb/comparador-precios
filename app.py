@@ -13,8 +13,11 @@ ARCHIVO_CONFIG = "config_opciones.json"
 
 def cargar_configuracion():
     if os.path.exists(ARCHIVO_CONFIG):
-        with open(ARCHIVO_CONFIG, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        try:
+            with open(ARCHIVO_CONFIG, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
     return {
         "marcas": ["Coca Cola", "Arcor", "Campanita", "Ayudin", "Cif", "Palmolive", "Carrefour", "Coto", "La Serenisima"],
         "productos": ["Gaseosa 1.5 Lts", "Aceite 1.5 Lts", "Lavandina 1 Lt", "Rollo de cocina x 3", "Jabon Liquido 500ml", "Leche 1 Lt"],
@@ -27,13 +30,17 @@ def guardar_configuracion(data):
 
 config_data = cargar_configuracion()
 
-# Inicializar listas en memoria (Session State)
+# Inicializar listas en memoria
 for key in ["marcas", "productos", "supermercados"]:
     if key not in st.session_state:
         st.session_state[key] = sorted(config_data[key])
 
 if "datos_alv" not in st.session_state:
     st.session_state.datos_alv = []
+
+# NUEVO: Controlar la cantidad de opciones (mínimo 2)
+if "num_opciones" not in st.session_state:
+    st.session_state.num_opciones = 2
 
 promociones = [
     "Sin Promo", "2do 80% Off", "2do 70% Off", "2do 50% Off", 
@@ -109,10 +116,26 @@ with col_p: producto = st.selectbox("Producto", sorted(st.session_state.producto
 with col_c: cantidad = st.number_input("Cantidad", min_value=1, value=1, step=1)
 
 st.subheader("Comparativa por Supermercado")
-cols_super = st.columns(3)
+
+# Controles dinámicos para agregar/quitar opciones
+col_btn_add, col_btn_rem, _ = st.columns([2, 2, 6])
+with col_btn_add:
+    if st.button("➕ Agregar Supermercado"):
+        st.session_state.num_opciones += 1
+        st.rerun()
+with col_btn_rem:
+    if st.button("➖ Quitar Supermercado"):
+        if st.session_state.num_opciones > 2:
+            st.session_state.num_opciones -= 1
+            st.rerun()
+        else:
+            st.warning("Debe haber un mínimo de 2 opciones.")
+
+# Crear las columnas dinámicamente según la cantidad elegida
+cols_super = st.columns(st.session_state.num_opciones)
 opciones = []
 
-for i in range(3):
+for i in range(st.session_state.num_opciones):
     with cols_super[i]:
         st.markdown(f"**Opción {i+1}**")
         superm = st.selectbox(f"Supermercado {i+1}", ["-"] + sorted(st.session_state.supermercados), index=0, key=f"sup_{i}")
@@ -137,15 +160,15 @@ if st.button("Calcular y Agregar a la Lista", type="primary"):
                 
             fila_export.update({
                 f"Supermercado {i+1}": op["super"],
-                f"Base {i+1}": round(op["precio"], 2),
-                f"Unitario c/Promo {i+1}": round(unit_cp, 2),
-                f"Total s/Promo {i+1}": round(tot_sp, 2),
-                f"Total c/Promo {i+1}": round(tot_cp, 2)
+                f"Precio Base {i+1}": op["precio"],
+                f"Unitario c/Promo {i+1}": unit_cp,
+                f"Total s/Promo {i+1}": tot_sp,
+                f"Total c/Promo {i+1}": tot_cp
             })
             
     ahorro = max(mejor_sp - mejor_precio, 0.0) if mejor_precio != float('inf') else 0.0
     fila_export["Mejor Opción"] = mejor_opcion
-    fila_export["Ahorro Generado"] = round(ahorro, 2)
+    fila_export["Ahorro Generado"] = ahorro
     
     st.session_state.datos_alv.append(fila_export)
     st.success("¡Producto agregado!")
@@ -155,15 +178,23 @@ if st.session_state.datos_alv:
     st.subheader("Lista de Compras Acumulada")
     df = pd.DataFrame(st.session_state.datos_alv)
     
-    # Mostrar tabla limpia
-    st.dataframe(df, use_container_width=True)
+    # Configurar las columnas dinámicamente para darles formato de moneda
+    column_config = {}
+    for col in df.columns:
+        if "Precio Base" in col:
+            # Cambiamos el nombre visual a "Precio Base" y agregamos formato $
+            column_config[col] = st.column_config.NumberColumn("Precio Base", format="$ %.2f")
+        elif any(kw in col for kw in ["Unitario", "Total", "Ahorro"]):
+            # Solo formato $ para las demás columnas de plata
+            column_config[col] = st.column_config.NumberColumn(format="$ %.2f")
+            
+    # Mostrar tabla limpia aplicando la configuración visual
+    st.dataframe(df, use_container_width=True, column_config=column_config)
     
     # Sumarizadores
     ahorro_total = df["Ahorro Generado"].sum()
     st.info(f"💰 **Ahorro Total Estimado:** ${ahorro_total:,.2f}")
     
-    # Exportar a Excel
-    # En la web no se puede usar el 'Guardar como...' clásico, se genera un botón de descarga.
     @st.cache_data
     def convertir_df(df):
         return df.to_csv(index=False).encode('utf-8')
