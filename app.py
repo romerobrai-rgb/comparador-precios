@@ -95,7 +95,6 @@ def extraer_numero(texto, default=0.0):
     return float(nums[0]) if nums else default
 
 def limpiar_query_para_busqueda(prod_str):
-    """Limpia el nombre del producto para que la API de búsqueda lo encuentre sin errores"""
     s = prod_str.lower()
     s = re.sub(r'\b(g|kg|ml|lt|lts|cc|cm3|un|pack)\b', '', s)
     s = re.sub(r'[\d\.,]+', '', s)
@@ -103,7 +102,7 @@ def limpiar_query_para_busqueda(prod_str):
     palabras = [w for w in s.split() if len(w) > 2]
     return " ".join(palabras[:3]) if palabras else prod_str
 
-# --- 2. MOTORES DE AUTOMATIZACIÓN (VTEX API & SCRAPING) ---
+# --- 2. MOTORES DE AUTOMATIZACIÓN ROBUSTOS ---
 def buscar_precio_vtex(supermercado, producto):
     dominio = ""
     if "carrefour" in supermercado.lower():
@@ -117,8 +116,12 @@ def buscar_precio_vtex(supermercado, producto):
     query_limpia = limpiar_query_para_busqueda(producto)
     try:
         url = f"https://{dominio}/api/catalog_system/pub/products/search?ft={query_limpia}"
-        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-        res = requests.get(url, headers=headers, timeout=5)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "es-ES,es;q=0.9"
+        }
+        res = requests.get(url, headers=headers, timeout=6)
         if res.status_code == 200:
             data = res.json()
             if data and len(data) > 0:
@@ -134,7 +137,10 @@ def buscar_precio_coto(producto):
         query_limpia = limpiar_query_para_busqueda(producto)
         query = query_limpia.replace(" ", "+")
         url = f"https://www.coto.com.ar/sitios/coto/busqueda?Ntt={query}"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept-Language": "es-ES,es;q=0.9"
+        }
         res = requests.get(url, headers=headers, timeout=6)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
@@ -295,9 +301,10 @@ with col_m: marca = st.selectbox("Marca", st.session_state.marcas)
 with col_p: producto = st.selectbox("Producto", st.session_state.productos)
 with col_c: cantidad = st.number_input("Cantidad", min_value=1, value=1, step=1)
 
-# Botón inteligente de búsqueda automática online con actualización directa de Estado
+# Botón inteligente de búsqueda automática online con manejo de bloqueos
 if st.button("🤖 Buscar Precios Online Automáticamente"):
-    with st.spinner("Consultando APIs de Carrefour, Día y Coto..."):
+    with st.spinner("Consultando servidores de supermercados..."):
+        encontrados = 0
         for i in range(st.session_state.num_opciones):
             sup_name = config_super[i]["nombre"]
             if sup_name != "-":
@@ -306,12 +313,16 @@ if st.button("🤖 Buscar Precios Online Automáticamente"):
                 
                 if precio_auto > 0:
                     st.session_state[key_input_precio] = precio_auto
+                    encontrados += 1
                 else:
-                    # Si no encuentra online, busca en el historial previo
+                    # Respaldo automático en el historial si el servidor bloquea la IP
                     hist = float(st.session_state.precios_historicos.get(producto, {}).get(sup_name, 0.0))
-                    if hist > 0:
-                        st.session_state[key_input_precio] = hist
-        st.success("¡Búsqueda finalizada! Precios actualizados en pantalla.")
+                    st.session_state[key_input_precio] = hist
+        
+        if encontrados > 0:
+            st.success(f"¡Se actualizaron {encontrados} precios automáticamente desde la web!")
+        else:
+            st.warning("⚠️ Los servidores de los supermercados bloquearon la consulta directa desde la nube. Se cargaron los precios de tu memoria histórica.")
         st.rerun()
 
 cols_items = st.columns(st.session_state.num_opciones)
@@ -326,7 +337,6 @@ for i in range(st.session_state.num_opciones):
     nombre_display = config_super[i]["nombre"] if config_super[i]["nombre"] != "-" else f"Opción {i+1}"
     key_input_precio = f"p_base_{producto}_{i}"
     
-    # Si la key no está en session_state, inicializar con el histórico
     if key_input_precio not in st.session_state:
         st.session_state[key_input_precio] = float(st.session_state.precios_historicos.get(producto, {}).get(nombre_display, 0.0))
 
