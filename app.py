@@ -7,7 +7,7 @@ import re
 # Configuración inicial de la página
 st.set_page_config(page_title="Comparador Inteligente Pro", layout="wide")
 
-st.title("🛒 Comparador Inteligente de Precios")
+st.title("🛒 Comparador Inteligente de Precios (Versión Local Estable)")
 
 # --- 1. GESTIÓN DE DATOS (JSON y Session State) ---
 ARCHIVO_CONFIG = "config_opciones.json"
@@ -17,7 +17,7 @@ ARCHIVO_SETUP = "setup_supermercados.json"
 def listas_por_defecto():
     return {
         "marcas": ["Coca Cola", "Arcor", "Campanita", "Ayudin", "Cif", "Palmolive", "Carrefour", "Coto", "La Serenisima", "Lucchetti"],
-        "productos": ["Gaseosa 1.5 Lts", "Aceite 1.5 Lts", "Lavandina 1 Lt", "Rollo de cocina x 3", "Jabon Liquido 500ml", "Leche 1 Lt", "Fideos tirabuzon N28 Lucchetti 500 g.", "Leche Clásica 3% L."],
+        "productos": ["Gaseosa 1.5 Lts", "Aceite 1.5 Lts", "Lavandina 1 Lt", "Rollo de cocina x 3", "Jabon Liquido 500ml", "Leche 1 Lt", "Fideos tirabuzon N28 Lucchetti 500 g."],
         "supermercados": ["Coto", "Carrefour", "Jumbo", "Dia", "ChangoMas", "Disco"],
         "promociones": ["Sin Promo", "2do 80% Off", "2do 70% Off", "2do 50% Off", "3x2", "4x3", "2x1", "10% Off", "20% Off", "25% Off", "30% Off", "40% Off", "50% Off"],
         "promos_pago": ["0%", "15%", "20%", "25%", "30%", "35%", "40%"],
@@ -220,9 +220,9 @@ guardar_setup(st.session_state.num_opciones, config_super)
 
 st.divider()
 
-# --- 5. INGRESO DE PRODUCTOS CON MEMORIA INTELIGENTE ---
+# --- 5. INGRESO DE PRODUCTOS CON MEMORIA HISTÓRICA ---
 st.subheader("2️⃣ Carga de Productos")
-st.caption("Los precios base se completan automáticamente con los valores que registraste anteriormente.")
+st.caption("Los precios base se completan automáticamente con los valores que guardaste anteriormente.")
 col_m, col_p, col_c = st.columns([1, 2, 1])
 with col_m: marca = st.selectbox("Marca", st.session_state.marcas)
 with col_p: producto = st.selectbox("Producto", st.session_state.productos)
@@ -327,7 +327,7 @@ if st.button("Calcular y Agregar a la Lista", type="primary"):
     
     st.session_state.datos_alv.append(fila_export)
     guardar_carrito(st.session_state.datos_alv)
-    st.success("¡Producto agregado y precios guardados con éxito!")
+    st.success("¡Producto agregado y precios guardados con éxito en la memoria!")
 
 # --- 6. VISUALIZADOR Y EXPORTACIÓN ---
 if st.session_state.datos_alv:
