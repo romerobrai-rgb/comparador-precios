@@ -11,6 +11,7 @@ st.title("🛒 Comparador Inteligente de Precios")
 
 # --- 1. GESTIÓN DE DATOS (JSON y Session State) ---
 ARCHIVO_CONFIG = "config_opciones.json"
+ARCHIVO_CARRITO = "carrito_actual.json"
 
 def listas_por_defecto():
     return {
@@ -20,7 +21,8 @@ def listas_por_defecto():
         "promociones": ["Sin Promo", "2do 80% Off", "2do 70% Off", "2do 50% Off", "3x2", "4x3", "2x1", "10% Off", "20% Off", "25% Off", "30% Off", "40% Off", "50% Off"],
         "promos_pago": ["0%", "15%", "20%", "25%", "30%", "35%", "40%"],
         "medios_pago": ["Efectivo", "Tarjeta de Débito", "Tarjeta de Crédito", "Mercado Pago", "MODO", "Cuenta DNI", "Personal Pay"],
-        "topes": ["Sin Tope", "3000", "5000", "8000", "10000", "15000", "20000"]
+        "topes": ["Sin Tope", "3000", "5000", "8000", "10000", "15000", "20000"],
+        "precios_historicos": {} 
     }
 
 def cargar_configuracion():
@@ -42,14 +44,27 @@ def guardar_configuracion():
     with open(ARCHIVO_CONFIG, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
+def cargar_carrito():
+    if os.path.exists(ARCHIVO_CARRITO):
+        try:
+            with open(ARCHIVO_CARRITO, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+def guardar_carrito(carrito_actual):
+    with open(ARCHIVO_CARRITO, 'w', encoding='utf-8') as f:
+        json.dump(carrito_actual, f, ensure_ascii=False, indent=4)
+
 config_data = cargar_configuracion()
 
 for key, values in config_data.items():
     if key not in st.session_state:
-        st.session_state[key] = sorted(values)
+        st.session_state[key] = values if isinstance(values, dict) else sorted(values)
 
 if "datos_alv" not in st.session_state:
-    st.session_state.datos_alv = []
+    st.session_state.datos_alv = cargar_carrito()
 
 if "num_opciones" not in st.session_state:
     st.session_state.num_opciones = 2
@@ -177,9 +192,22 @@ if "Sin Promo" in lista_promos:
 
 for i in range(st.session_state.num_opciones):
     nombre_display = config_super[i]["nombre"] if config_super[i]["nombre"] != "-" else f"Opción {i+1}"
+    
+    # Buscamos el precio histórico específico para este producto y este supermercado
+    precio_guardado = float(st.session_state.precios_historicos.get(producto, {}).get(nombre_display, 0.0))
+    
     with cols_items[i]:
         st.markdown(f"**🛒 {nombre_display}**")
-        precio_base = st.number_input(f"Precio Base $", min_value=0.0, step=100.0, key=f"p_base_{i}")
+        # Usamos una clave dinámica que cambia al cambiar de producto para forzar a Streamlit a actualizar el valor
+        key_input_precio = f"p_base_{producto}_{i}"
+        
+        precio_base = st.number_input(
+            f"Precio Base $", 
+            min_value=0.0, 
+            step=100.0, 
+            value=precio_guardado, 
+            key=key_input_precio
+        )
         promo = st.selectbox(f"Promo Góndola", lista_promos, key=f"p_promo_{i}")
         opciones_item.append({"precio": precio_base, "promo": promo})
 
@@ -189,9 +217,16 @@ if st.button("Calcular y Agregar a la Lista", type="primary"):
     
     fila_export = {"Marca": marca, "Producto": producto, "Cantidad": cantidad}
     
+    if producto not in st.session_state.precios_historicos:
+        st.session_state.precios_historicos[producto] = {}
+        
     for i, item in enumerate(opciones_item):
         conf = config_super[i]
         if conf["nombre"] != "-":
+            # Guardamos el precio actualizado en la memoria histórica
+            st.session_state.precios_historicos[producto][conf["nombre"]] = item["precio"]
+            guardar_configuracion()
+            
             unit_cp, tot_sp, tot_cp = calcular_promo_producto(cantidad, item["precio"], item["promo"])
             tuvo_promo_gondola = item["promo"] != "Sin Promo"
             
@@ -208,7 +243,6 @@ if st.button("Calcular y Agregar a la Lista", type="primary"):
             descuento_banco_real = min(descuento_banco_teorico, reintegro_disponible)
             total_final_bolsillo = tot_cp - descuento_banco_real
             
-            # Calculamos lo ahorrado en este supermercado específico vs su propio precio base
             ahorro_super = max((item["precio"] * cantidad) - total_final_bolsillo, 0.0)
 
             if total_final_bolsillo > 0 and total_final_bolsillo < mejor_precio_final:
@@ -224,7 +258,6 @@ if st.button("Calcular y Agregar a la Lista", type="primary"):
                 f"Ahorrado {i+1}": ahorro_super
             })
             
-    # Datos de la mejor opción para la tabla final
     ahorro_real = 0.0
     precio_base_mejor = 0.0
     for i, item in enumerate(opciones_item):
@@ -239,7 +272,8 @@ if st.button("Calcular y Agregar a la Lista", type="primary"):
     fila_export["💰 Ahorro Real"] = ahorro_real
     
     st.session_state.datos_alv.append(fila_export)
-    st.success("¡Producto agregado con inteligencia bancaria!")
+    guardar_carrito(st.session_state.datos_alv)
+    st.success("¡Producto agregado y precios guardados correctamente!")
 
 # --- 6. VISUALIZADOR Y EXPORTACIÓN ---
 if st.session_state.datos_alv:
@@ -280,7 +314,6 @@ if st.session_state.datos_alv:
                     }
                 )
                 
-                # Subtotales de esta tarjeta
                 subtotal_base = (mini_df["Precio Base"] * mini_df["Cantidad"]).sum() if "Precio Base" in mini_df.columns else 0
                 subtotal_pagar = mini_df["Precio Final"].sum() if "Precio Final" in mini_df.columns else 0
                 subtotal_ahorrado = mini_df["Ahorrado"].sum() if "Ahorrado" in mini_df.columns else 0
@@ -309,7 +342,6 @@ if st.session_state.datos_alv:
         }
     )
     
-    # Subtotales Finales (El Base se multiplica por cantidad para comparar el ticket real)
     tot_base_res = (resumen_df["Precio Base"] * resumen_df["Cantidad"]).sum()
     tot_final_res = resumen_df["Precio Final"].sum()
     tot_ahorro_res = resumen_df["Ahorrado"].sum()
@@ -331,6 +363,7 @@ if st.session_state.datos_alv:
             if item_a_borrar != "-":
                 idx = int(item_a_borrar.split(":")[0].replace("Fila ", "")) - 1
                 st.session_state.datos_alv.pop(idx)
+                guardar_carrito(st.session_state.datos_alv)
                 st.rerun()
 
     st.write("") 
@@ -352,4 +385,5 @@ if st.session_state.datos_alv:
     with col_del:
         if st.button("🗑️ Borrar Lista Completa"):
             st.session_state.datos_alv = []
+            guardar_carrito([])
             st.rerun()
