@@ -9,7 +9,7 @@ from bs4 import BeautifulSoup
 # Configuración inicial de la página
 st.set_page_config(page_title="Comparador Inteligente Pro", layout="wide")
 
-st.title("🛒 Comparador Inteligente de Precios + Automatización Total")
+st.title("🛒 Comparador Inteligente de Precios + Web en Tiempo Real")
 
 # --- 1. GESTIÓN DE DATOS (JSON y Session State) ---
 ARCHIVO_CONFIG = "config_opciones.json"
@@ -95,6 +95,7 @@ def extraer_numero(texto, default=0.0):
     return float(nums[0]) if nums else default
 
 def limpiar_query_para_busqueda(prod_str):
+    """Limpia el texto del producto para una búsqueda web exitosa"""
     s = prod_str.lower()
     s = re.sub(r'\b(g|kg|ml|lt|lts|cc|cm3|un|pack)\b', '', s)
     s = re.sub(r'[\d\.,]+', '', s)
@@ -102,7 +103,7 @@ def limpiar_query_para_busqueda(prod_str):
     palabras = [w for w in s.split() if len(w) > 2]
     return " ".join(palabras[:3]) if palabras else prod_str
 
-# --- 2. MOTORES DE AUTOMATIZACIÓN ROBUSTOS ---
+# --- 2. MOTORES DE EXTRACCIÓN WEB EN TIEMPO REAL ---
 def buscar_precio_vtex(supermercado, producto):
     dominio = ""
     if "carrefour" in supermercado.lower():
@@ -114,22 +115,41 @@ def buscar_precio_vtex(supermercado, producto):
         return 0.0
 
     query_limpia = limpiar_query_para_busqueda(producto)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+        "Referer": f"https://{dominio}/"
+    }
+    
+    # 1. Intentar con Intelligent Search API (VTEX Moderno)
     try:
-        url = f"https://{dominio}/api/catalog_system/pub/products/search?ft={query_limpia}"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "es-ES,es;q=0.9"
-        }
-        res = requests.get(url, headers=headers, timeout=6)
+        url_is = f"https://{dominio}/api/io/_v/api/intelligent-search/product_search/v1/query?query={query_limpia}&count=1"
+        res = requests.get(url_is, headers=headers, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            products = data.get("products", [])
+            if products:
+                sellers = products[0].get("items", [{}])[0].get("sellers", [])
+                if sellers:
+                    price = sellers[0].get("commertialOffer", {}).get("Price", 0.0)
+                    if price > 0:
+                        return float(price)
+    except Exception:
+        pass
+
+    # 2. Respaldo con Catalog API (VTEX Clásico)
+    try:
+        url_cat = f"https://{dominio}/api/catalog_system/pub/products/search?ft={query_limpia}"
+        res = requests.get(url_cat, headers=headers, timeout=5)
         if res.status_code == 200:
             data = res.json()
             if data and len(data) > 0:
-                item = data[0]
-                precio = item['items'][0]['sellers'][0]['commertialOffer']['Price']
-                return float(precio)
+                price = data[0]['items'][0]['sellers'][0]['commertialOffer']['Price']
+                if price > 0:
+                    return float(price)
     except Exception:
         pass
+
     return 0.0
 
 def buscar_precio_coto(producto):
@@ -144,12 +164,14 @@ def buscar_precio_coto(producto):
         res = requests.get(url, headers=headers, timeout=6)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
-            tag = soup.find(class_=re.compile("prec|price|f$", re.I))
-            if tag:
+            tags = soup.find_all(class_=re.compile("prec|price|f$", re.I))
+            for tag in tags:
                 texto = tag.get_text().replace('$', '').replace('.', '').replace(',', '.').strip()
                 nums = re.findall(r'\d+\.\d+|\d+', texto)
                 if nums:
-                    return float(nums[0])
+                    val = float(nums[0])
+                    if val > 10:  # Filtrar valores irrelevantes
+                        return val
     except Exception:
         pass
     return 0.0
@@ -157,13 +179,9 @@ def buscar_precio_coto(producto):
 def obtener_precio_automatico(supermercado, producto):
     sup_lower = supermercado.lower()
     if "carrefour" in sup_lower or "dia" in sup_lower:
-        precio = buscar_precio_vtex(supermercado, producto)
-        if precio > 0:
-            return precio
+        return buscar_precio_vtex(supermercado, producto)
     elif "coto" in sup_lower:
-        precio = buscar_precio_coto(producto)
-        if precio > 0:
-            return precio
+        return buscar_precio_coto(producto)
     return 0.0
 
 # --- 3. LÓGICA MATEMÁTICA DE PRODUCTOS ---
@@ -294,35 +312,35 @@ guardar_setup(st.session_state.num_opciones, config_super)
 
 st.divider()
 
-# --- 6. INGRESO DE PRODUCTOS + AUTOMATIZACIÓN ---
-st.subheader("2️⃣ Carga de Productos con Automatización")
+# --- 6. INGRESO DE PRODUCTOS + EXTRACCIÓN WEB ---
+st.subheader("2️⃣ Carga de Productos con Web en Vivo")
 col_m, col_p, col_c = st.columns([1, 2, 1])
 with col_m: marca = st.selectbox("Marca", st.session_state.marcas)
 with col_p: producto = st.selectbox("Producto", st.session_state.productos)
 with col_c: cantidad = st.number_input("Cantidad", min_value=1, value=1, step=1)
 
-# Botón inteligente de búsqueda automática online con manejo de bloqueos
-if st.button("🤖 Buscar Precios Online Automáticamente"):
-    with st.spinner("Consultando servidores de supermercados..."):
+# Botón para extraer precios web en vivo obligatoriamente
+if st.button("🌐 OBTENER PRECIOS DE LA WEB AHORA"):
+    with st.spinner("Conectando con las tiendas online de Carrefour, Día y Coto..."):
         encontrados = 0
         for i in range(st.session_state.num_opciones):
             sup_name = config_super[i]["nombre"]
             if sup_name != "-":
                 key_input_precio = f"p_base_{producto}_{i}"
-                precio_auto = obtener_precio_automatico(sup_name, producto)
+                precio_web = obtener_precio_automatico(sup_name, producto)
                 
-                if precio_auto > 0:
-                    st.session_state[key_input_precio] = precio_auto
+                if precio_web > 0:
+                    st.session_state[key_input_precio] = precio_web
                     encontrados += 1
                 else:
-                    # Respaldo automático en el historial si el servidor bloquea la IP
+                    # Si la web no responde, mantiene o busca el histórico
                     hist = float(st.session_state.precios_historicos.get(producto, {}).get(sup_name, 0.0))
                     st.session_state[key_input_precio] = hist
         
         if encontrados > 0:
-            st.success(f"¡Se actualizaron {encontrados} precios automáticamente desde la web!")
+            st.success(f"¡Éxito! Se obtuvieron {encontrados} precios en vivo desde las webs.")
         else:
-            st.warning("⚠️ Los servidores de los supermercados bloquearon la consulta directa desde la nube. Se cargaron los precios de tu memoria histórica.")
+            st.warning("⚠️ No se pudo extraer automáticamente de la web (posible bloqueo temporal). Se cargó el valor guardado en memoria.")
         st.rerun()
 
 cols_items = st.columns(st.session_state.num_opciones)
