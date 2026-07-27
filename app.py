@@ -3,13 +3,11 @@ import pandas as pd
 import json
 import os
 import re
-import requests
-from bs4 import BeautifulSoup
 
 # Configuración inicial de la página
 st.set_page_config(page_title="Comparador de Precios Inteligente", layout="wide")
 
-st.title("🛒 Comparador Inteligente de Precios + Web Scraping")
+st.title("🛒 Comparador Inteligente de Precios")
 
 # --- 1. GESTIÓN DE DATOS (JSON y Session State) ---
 ARCHIVO_CONFIG = "config_opciones.json"
@@ -25,8 +23,7 @@ def listas_por_defecto():
         "promos_pago": ["0%", "15%", "20%", "25%", "30%", "35%", "40%"],
         "medios_pago": ["Efectivo", "Tarjeta de Débito", "Tarjeta de Crédito", "Mercado Pago", "MODO", "Cuenta DNI", "Personal Pay"],
         "topes": ["Sin Tope", "3000", "5000", "8000", "10000", "15000", "20000"],
-        "precios_historicos": {},
-        "links_productos": {} 
+        "precios_historicos": {} 
     }
 
 def cargar_configuracion():
@@ -95,61 +92,7 @@ def extraer_numero(texto, default=0.0):
     nums = re.findall(r'\d+', str(texto).replace('.', ''))
     return float(nums[0]) if nums else default
 
-# --- 2. MOTOR DE SCRAPING ESPECÍFICO (ARGENTINA) ---
-def obtener_precio_web(url, supermercado):
-    """Extrae el precio adaptado a las estructuras web de Coto y Carrefour."""
-    if not url or "http" not in url:
-        return 0.0
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Accept-Language": "es-ES,es;q=0.9"
-        }
-        response = requests.get(url, headers=headers, timeout=8)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
-            texto_precio = ""
-
-            # Scraping específico según el supermercado
-            if "carrefour" in supermercado.lower() or "carrefour.com.ar" in url:
-                # Buscar contenedor de precio en Carrefour
-                tag = soup.find(class_=re.compile("val|price|selling-price", re.I))
-                if not tag:
-                    tag = soup.find("span", {"class": lambda x: x and "price" in x.lower()})
-                if tag:
-                    texto_precio = tag.get_text()
-
-            elif "coto" in supermercado.lower() or "coto.com.ar" in url:
-                # En Coto buscamos primero precio en oferta o precio regular
-                tag = soup.find(class_=re.compile("prec|price|f$|number", re.I))
-                if tag:
-                    texto_precio = tag.get_text()
-                else:
-                    # Intento alternativo buscando elementos con formato de moneda
-                    for span in soup.find_all("span"):
-                        if "$" in span.get_text():
-                            texto_precio = span.get_text()
-                            break
-
-            # Si no encontró por regla específica, busca cualquier etiqueta con signo $
-            if not texto_precio:
-                for el in soup.find_all(text=lambda t: t and '$' in t):
-                    if len(el.strip()) < 15:
-                        texto_precio = el
-                        break
-
-            if texto_precio:
-                # Limpiar texto de precio (ej: "$ 1.465,00" -> 1465.00)
-                limpio = texto_precio.replace('$', '').replace('.', '').replace(',', '.').strip()
-                match = re.search(r'\d+\.\d+|\d+', limpio)
-                if match:
-                    return float(match.group(0))
-
-        return 0.0
-    except Exception as e:
-        return 0.0
-
-# --- 3. LÓGICA MATEMÁTICA DE PRODUCTOS ---
+# --- 2. LÓGICA MATEMÁTICA DE PRODUCTOS ---
 def calcular_promo_producto(cantidad, precio, promo):
     if cantidad == 0 or precio == 0.0: return 0.0, 0.0, 0.0
     total_sin_promo = cantidad * precio
@@ -182,7 +125,7 @@ def calcular_promo_producto(cantidad, precio, promo):
         
     return total_con_promo / cantidad, total_sin_promo, total_con_promo
 
-# --- 4. MENÚ LATERAL: ADMINISTRACIÓN Y LINKS WEB ---
+# --- 3. MENÚ LATERAL: ADMINISTRACIÓN Y RESET ---
 def panel_administracion(clave, titulo):
     with st.expander(f"⚙️ {titulo}"):
         nuevo = st.text_input(f"Agregar {titulo}:", key=f"add_in_{clave}")
@@ -211,17 +154,6 @@ with st.sidebar:
     panel_administracion("promos_pago", "Descuentos de Pago (%)")
     panel_administracion("topes", "Topes de Reintegro ($)")
     
-    with st.expander("🔗 Vincular Links Web (Scraping)"):
-        p_sel = st.selectbox("Seleccionar Producto:", st.session_state.productos, key="link_prod")
-        s_sel = st.selectbox("Seleccionar Supermercado:", st.session_state.supermercados, key="link_sup")
-        url_ingresada = st.text_input("URL Directa del Producto:", key="link_url")
-        if st.button("Guardar Link Web"):
-            if p_sel not in st.session_state.links_productos:
-                st.session_state.links_productos[p_sel] = {}
-            st.session_state.links_productos[p_sel][s_sel] = url_ingresada
-            guardar_configuracion()
-            st.success("¡Link guardado para scraping!")
-
     st.divider()
     st.warning("⚠️ Zona de Peligro")
     if st.button("🔄 REINICIO TOTAL DE COMPRA"):
@@ -232,8 +164,9 @@ with st.sidebar:
         st.success("¡Sistema reiniciado por completo!")
         st.rerun()
 
-# --- 5. CONFIGURACIÓN GLOBAL DE LA COMPRA ---
+# --- 4. CONFIGURACIÓN GLOBAL DE LA COMPRA ---
 st.subheader("1️⃣ Configuración de Supermercados y Medios de Pago")
+st.caption("Definí dónde y cómo vas a pagar hoy. Estos descuentos se aplicarán automáticamente a cada producto.")
 
 col_btn_add, col_btn_rem, _ = st.columns([2, 2, 6])
 with col_btn_add:
@@ -262,6 +195,7 @@ for i in range(st.session_state.num_opciones):
 
     with cols_setup[i]:
         st.markdown(f"**Opción {i+1}**")
+        
         sup_idx = st.session_state.supermercados.index(def_sup) + 1 if def_sup in st.session_state.supermercados else 0
         med_idx = st.session_state.medios_pago.index(def_med) + 1 if def_med in st.session_state.medios_pago else 0
         dcto_idx = ["0%"] + st.session_state.promos_pago
@@ -287,26 +221,13 @@ guardar_setup(st.session_state.num_opciones, config_super)
 
 st.divider()
 
-# --- 6. INGRESO DE PRODUCTOS + SCRAPING INTELIGENTE ---
+# --- 5. INGRESO DE PRODUCTOS ---
 st.subheader("2️⃣ Carga de Productos")
+st.caption("Los precios se autocompletarán automáticamente con lo último que hayas registrado para cada producto.")
 col_m, col_p, col_c = st.columns([1, 2, 1])
 with col_m: marca = st.selectbox("Marca", st.session_state.marcas)
 with col_p: producto = st.selectbox("Producto", st.session_state.productos)
 with col_c: cantidad = st.number_input("Cantidad", min_value=1, value=1, step=1)
-
-if st.button("🌐 Traer Precios Automáticos (Scraping)"):
-    with st.spinner("Conectando con las webs de los supermercados..."):
-        for i in range(st.session_state.num_opciones):
-            sup_name = config_super[i]["nombre"]
-            if sup_name != "-":
-                url_producto = st.session_state.links_productos.get(producto, {}).get(sup_name, "")
-                precio_scrap = obtener_precio_web(url_producto, sup_name)
-                if precio_scrap > 0:
-                    st.session_state[f"precio_for_input_{i}"] = precio_scrap
-                else:
-                    # Si falla el scraping, recurre al histórico guardado
-                    st.session_state[f"precio_for_input_{i}"] = float(st.session_state.precios_historicos.get(producto, {}).get(sup_name, 0.0))
-        st.success("¡Precios analizados! (Si alguna web bloqueó la lectura automática, podés ajustarlo manualmente abajo).")
 
 cols_items = st.columns(st.session_state.num_opciones)
 opciones_item = []
@@ -319,7 +240,8 @@ if "Sin Promo" in lista_promos:
 for i in range(st.session_state.num_opciones):
     nombre_display = config_super[i]["nombre"] if config_super[i]["nombre"] != "-" else f"Opción {i+1}"
     
-    precio_por_defecto = st.session_state.get(f"precio_for_input_{i}", float(st.session_state.precios_historicos.get(producto, {}).get(nombre_display, 0.0)))
+    # Memoria inteligente de precios previos por producto y supermercado
+    precio_guardado = float(st.session_state.precios_historicos.get(producto, {}).get(nombre_display, 0.0))
     
     with cols_items[i]:
         st.markdown(f"**🛒 {nombre_display}**")
@@ -329,7 +251,7 @@ for i in range(st.session_state.num_opciones):
             f"Precio Base $", 
             min_value=0.0, 
             step=100.0, 
-            value=float(precio_por_defecto), 
+            value=precio_guardado, 
             key=key_input_precio
         )
         promo = st.selectbox(f"Promo Góndola", lista_promos, key=f"p_promo_{i}")
@@ -347,6 +269,7 @@ if st.button("Calcular y Agregar a la Lista", type="primary"):
     for i, item in enumerate(opciones_item):
         conf = config_super[i]
         if conf["nombre"] != "-":
+            # Guarda automáticamente el precio ingresado en la memoria histórica
             st.session_state.precios_historicos[producto][conf["nombre"]] = item["precio"]
             guardar_configuracion()
             
@@ -406,9 +329,9 @@ if st.button("Calcular y Agregar a la Lista", type="primary"):
     
     st.session_state.datos_alv.append(fila_export)
     guardar_carrito(st.session_state.datos_alv)
-    st.success("¡Producto agregado y precios guardados correctamente!")
+    st.success("¡Producto agregado y precios guardados en la memoria correctamente!")
 
-# --- 7. VISUALIZADOR Y EXPORTACIÓN ---
+# --- 6. VISUALIZADOR Y EXPORTACIÓN ---
 if st.session_state.datos_alv:
     df = pd.DataFrame(st.session_state.datos_alv)
     
