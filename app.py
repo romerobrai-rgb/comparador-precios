@@ -3,13 +3,11 @@ import pandas as pd
 import json
 import os
 import re
-import requests
-from bs4 import BeautifulSoup
 
 # Configuración inicial de la página
 st.set_page_config(page_title="Comparador Inteligente Pro", layout="wide")
 
-st.title("🛒 Comparador Inteligente de Precios + Web en Tiempo Real")
+st.title("🛒 Comparador Inteligente de Precios")
 
 # --- 1. GESTIÓN DE DATOS (JSON y Session State) ---
 ARCHIVO_CONFIG = "config_opciones.json"
@@ -19,7 +17,7 @@ ARCHIVO_SETUP = "setup_supermercados.json"
 def listas_por_defecto():
     return {
         "marcas": ["Coca Cola", "Arcor", "Campanita", "Ayudin", "Cif", "Palmolive", "Carrefour", "Coto", "La Serenisima", "Lucchetti"],
-        "productos": ["Gaseosa 1.5 Lts", "Aceite 1.5 Lts", "Lavandina 1 Lt", "Rollo de cocina x 3", "Jabon Liquido 500ml", "Leche 1 Lt", "Fideos tirabuzon N28 Lucchetti 500 g."],
+        "productos": ["Gaseosa 1.5 Lts", "Aceite 1.5 Lts", "Lavandina 1 Lt", "Rollo de cocina x 3", "Jabon Liquido 500ml", "Leche 1 Lt", "Fideos tirabuzon N28 Lucchetti 500 g.", "Leche Clásica 3% L."],
         "supermercados": ["Coto", "Carrefour", "Jumbo", "Dia", "ChangoMas", "Disco"],
         "promociones": ["Sin Promo", "2do 80% Off", "2do 70% Off", "2do 50% Off", "3x2", "4x3", "2x1", "10% Off", "20% Off", "25% Off", "30% Off", "40% Off", "50% Off"],
         "promos_pago": ["0%", "15%", "20%", "25%", "30%", "35%", "40%"],
@@ -94,97 +92,7 @@ def extraer_numero(texto, default=0.0):
     nums = re.findall(r'\d+', str(texto).replace('.', ''))
     return float(nums[0]) if nums else default
 
-def limpiar_query_para_busqueda(prod_str):
-    """Limpia el texto del producto para una búsqueda web exitosa"""
-    s = prod_str.lower()
-    s = re.sub(r'\b(g|kg|ml|lt|lts|cc|cm3|un|pack)\b', '', s)
-    s = re.sub(r'[\d\.,]+', '', s)
-    s = re.sub(r'[^a-záéíóúñ\s]', '', s)
-    palabras = [w for w in s.split() if len(w) > 2]
-    return " ".join(palabras[:3]) if palabras else prod_str
-
-# --- 2. MOTORES DE EXTRACCIÓN WEB EN TIEMPO REAL ---
-def buscar_precio_vtex(supermercado, producto):
-    dominio = ""
-    if "carrefour" in supermercado.lower():
-        dominio = "www.carrefour.com.ar"
-    elif "dia" in supermercado.lower():
-        dominio = "diaonline.supermercadosdia.com.ar"
-    
-    if not dominio:
-        return 0.0
-
-    query_limpia = limpiar_query_para_busqueda(producto)
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "application/json",
-        "Referer": f"https://{dominio}/"
-    }
-    
-    # 1. Intentar con Intelligent Search API (VTEX Moderno)
-    try:
-        url_is = f"https://{dominio}/api/io/_v/api/intelligent-search/product_search/v1/query?query={query_limpia}&count=1"
-        res = requests.get(url_is, headers=headers, timeout=5)
-        if res.status_code == 200:
-            data = res.json()
-            products = data.get("products", [])
-            if products:
-                sellers = products[0].get("items", [{}])[0].get("sellers", [])
-                if sellers:
-                    price = sellers[0].get("commertialOffer", {}).get("Price", 0.0)
-                    if price > 0:
-                        return float(price)
-    except Exception:
-        pass
-
-    # 2. Respaldo con Catalog API (VTEX Clásico)
-    try:
-        url_cat = f"https://{dominio}/api/catalog_system/pub/products/search?ft={query_limpia}"
-        res = requests.get(url_cat, headers=headers, timeout=5)
-        if res.status_code == 200:
-            data = res.json()
-            if data and len(data) > 0:
-                price = data[0]['items'][0]['sellers'][0]['commertialOffer']['Price']
-                if price > 0:
-                    return float(price)
-    except Exception:
-        pass
-
-    return 0.0
-
-def buscar_precio_coto(producto):
-    try:
-        query_limpia = limpiar_query_para_busqueda(producto)
-        query = query_limpia.replace(" ", "+")
-        url = f"https://www.coto.com.ar/sitios/coto/busqueda?Ntt={query}"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Accept-Language": "es-ES,es;q=0.9"
-        }
-        res = requests.get(url, headers=headers, timeout=6)
-        if res.status_code == 200:
-            soup = BeautifulSoup(res.text, 'html.parser')
-            tags = soup.find_all(class_=re.compile("prec|price|f$", re.I))
-            for tag in tags:
-                texto = tag.get_text().replace('$', '').replace('.', '').replace(',', '.').strip()
-                nums = re.findall(r'\d+\.\d+|\d+', texto)
-                if nums:
-                    val = float(nums[0])
-                    if val > 10:  # Filtrar valores irrelevantes
-                        return val
-    except Exception:
-        pass
-    return 0.0
-
-def obtener_precio_automatico(supermercado, producto):
-    sup_lower = supermercado.lower()
-    if "carrefour" in sup_lower or "dia" in sup_lower:
-        return buscar_precio_vtex(supermercado, producto)
-    elif "coto" in sup_lower:
-        return buscar_precio_coto(producto)
-    return 0.0
-
-# --- 3. LÓGICA MATEMÁTICA DE PRODUCTOS ---
+# --- 2. LÓGICA MATEMÁTICA DE PRODUCTOS ---
 def calcular_promo_producto(cantidad, precio, promo):
     if cantidad == 0 or precio == 0.0: return 0.0, 0.0, 0.0
     total_sin_promo = cantidad * precio
@@ -217,7 +125,7 @@ def calcular_promo_producto(cantidad, precio, promo):
         
     return total_con_promo / cantidad, total_sin_promo, total_con_promo
 
-# --- 4. MENÚ LATERAL: ADMINISTRACIÓN Y RESET ---
+# --- 3. MENÚ LATERAL: ADMINISTRACIÓN Y RESET ---
 def panel_administracion(clave, titulo):
     with st.expander(f"⚙️ {titulo}"):
         nuevo = st.text_input(f"Agregar {titulo}:", key=f"add_in_{clave}")
@@ -256,7 +164,7 @@ with st.sidebar:
         st.success("¡Sistema reiniciado por completo!")
         st.rerun()
 
-# --- 5. CONFIGURACIÓN GLOBAL DE LA COMPRA ---
+# --- 4. CONFIGURACIÓN GLOBAL DE LA COMPRA ---
 st.subheader("1️⃣ Configuración de Supermercados y Medios de Pago")
 st.caption("Definí dónde y cómo vas a pagar hoy. Estos descuentos se aplicarán automáticamente a cada producto.")
 
@@ -312,36 +220,13 @@ guardar_setup(st.session_state.num_opciones, config_super)
 
 st.divider()
 
-# --- 6. INGRESO DE PRODUCTOS + EXTRACCIÓN WEB ---
-st.subheader("2️⃣ Carga de Productos con Web en Vivo")
+# --- 5. INGRESO DE PRODUCTOS CON MEMORIA INTELIGENTE ---
+st.subheader("2️⃣ Carga de Productos")
+st.caption("Los precios base se completan automáticamente con los valores que registraste anteriormente.")
 col_m, col_p, col_c = st.columns([1, 2, 1])
 with col_m: marca = st.selectbox("Marca", st.session_state.marcas)
 with col_p: producto = st.selectbox("Producto", st.session_state.productos)
 with col_c: cantidad = st.number_input("Cantidad", min_value=1, value=1, step=1)
-
-# Botón para extraer precios web en vivo obligatoriamente
-if st.button("🌐 OBTENER PRECIOS DE LA WEB AHORA"):
-    with st.spinner("Conectando con las tiendas online de Carrefour, Día y Coto..."):
-        encontrados = 0
-        for i in range(st.session_state.num_opciones):
-            sup_name = config_super[i]["nombre"]
-            if sup_name != "-":
-                key_input_precio = f"p_base_{producto}_{i}"
-                precio_web = obtener_precio_automatico(sup_name, producto)
-                
-                if precio_web > 0:
-                    st.session_state[key_input_precio] = precio_web
-                    encontrados += 1
-                else:
-                    # Si la web no responde, mantiene o busca el histórico
-                    hist = float(st.session_state.precios_historicos.get(producto, {}).get(sup_name, 0.0))
-                    st.session_state[key_input_precio] = hist
-        
-        if encontrados > 0:
-            st.success(f"¡Éxito! Se obtuvieron {encontrados} precios en vivo desde las webs.")
-        else:
-            st.warning("⚠️ No se pudo extraer automáticamente de la web (posible bloqueo temporal). Se cargó el valor guardado en memoria.")
-        st.rerun()
 
 cols_items = st.columns(st.session_state.num_opciones)
 opciones_item = []
@@ -353,18 +238,19 @@ if "Sin Promo" in lista_promos:
 
 for i in range(st.session_state.num_opciones):
     nombre_display = config_super[i]["nombre"] if config_super[i]["nombre"] != "-" else f"Opción {i+1}"
-    key_input_precio = f"p_base_{producto}_{i}"
     
-    if key_input_precio not in st.session_state:
-        st.session_state[key_input_precio] = float(st.session_state.precios_historicos.get(producto, {}).get(nombre_display, 0.0))
-
+    # Recupera de inmediato el precio guardado en la memoria histórica para este producto y súper
+    precio_guardado = float(st.session_state.precios_historicos.get(producto, {}).get(nombre_display, 0.0))
+    
     with cols_items[i]:
         st.markdown(f"**🛒 {nombre_display}**")
+        key_input_precio = f"p_base_{producto}_{i}"
         
         precio_base = st.number_input(
             f"Precio Base $", 
             min_value=0.0, 
             step=100.0, 
+            value=precio_guardado, 
             key=key_input_precio
         )
         promo = st.selectbox(f"Promo Góndola", lista_promos, key=f"p_promo_{i}")
@@ -443,7 +329,7 @@ if st.button("Calcular y Agregar a la Lista", type="primary"):
     guardar_carrito(st.session_state.datos_alv)
     st.success("¡Producto agregado y precios guardados con éxito!")
 
-# --- 7. VISUALIZADOR Y EXPORTACIÓN ---
+# --- 6. VISUALIZADOR Y EXPORTACIÓN ---
 if st.session_state.datos_alv:
     df = pd.DataFrame(st.session_state.datos_alv)
     
