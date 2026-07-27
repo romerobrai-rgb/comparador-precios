@@ -12,7 +12,7 @@ st.title("🛒 Comparador Inteligente de Precios")
 # --- 1. GESTIÓN DE DATOS (JSON y Session State) ---
 ARCHIVO_CONFIG = "config_opciones.json"
 ARCHIVO_CARRITO = "carrito_actual.json"
-ARCHIVO_SETUP = "setup_supermercados.json" # Nuevo: Guarda los supers y medios de pago elegidos arriba
+ARCHIVO_SETUP = "setup_supermercados.json"
 
 def listas_por_defecto():
     return {
@@ -84,7 +84,6 @@ for key, values in config_data.items():
 if "datos_alv" not in st.session_state:
     st.session_state.datos_alv = cargar_carrito()
 
-# Cargar setup guardado si existe, sino arrancar en 2
 saved_setup = cargar_setup()
 if "num_opciones" not in st.session_state:
     st.session_state.num_opciones = saved_setup["num_opciones"] if saved_setup else 2
@@ -126,7 +125,7 @@ def calcular_promo_producto(cantidad, precio, promo):
         
     return total_con_promo / cantidad, total_sin_promo, total_con_promo
 
-# --- 3. MENÚ LATERAL: ADMINISTRACIÓN Y RESET ---
+# --- 3. MENÚ LATERAL: ADMINISTRACIÓN ---
 def panel_administracion(clave, titulo):
     with st.expander(f"⚙️ {titulo}"):
         nuevo = st.text_input(f"Agregar {titulo}:", key=f"add_in_{clave}")
@@ -186,7 +185,6 @@ config_super = []
 cols_setup = st.columns(st.session_state.num_opciones)
 
 for i in range(st.session_state.num_opciones):
-    # Cargar valores guardados previamente si existen en el archivo de setup
     saved_opt = saved_setup["config_super"][i] if saved_setup and "config_super" in saved_setup and i < len(saved_setup["config_super"]) else {}
     
     def_sup = saved_opt.get("nombre", "-")
@@ -198,7 +196,6 @@ for i in range(st.session_state.num_opciones):
     with cols_setup[i]:
         st.markdown(f"**Opción {i+1}**")
         
-        # Obtener índice por defecto para los selectbox
         sup_idx = st.session_state.supermercados.index(def_sup) + 1 if def_sup in st.session_state.supermercados else 0
         med_idx = st.session_state.medios_pago.index(def_med) + 1 if def_med in st.session_state.medios_pago else 0
         dcto_idx = ["0%"] + st.session_state.promos_pago
@@ -220,7 +217,6 @@ for i in range(st.session_state.num_opciones):
             "acumulable": s_acum
         })
 
-# Guardar setup automáticamente ante cualquier cambio
 guardar_setup(st.session_state.num_opciones, config_super)
 
 st.divider()
@@ -242,7 +238,6 @@ if "Sin Promo" in lista_promos:
 
 for i in range(st.session_state.num_opciones):
     nombre_display = config_super[i]["nombre"] if config_super[i]["nombre"] != "-" else f"Opción {i+1}"
-    
     precio_guardado = float(st.session_state.precios_historicos.get(producto, {}).get(nombre_display, 0.0))
     
     with cols_items[i]:
@@ -278,11 +273,12 @@ if st.button("Calcular y Agregar a la Lista", type="primary"):
             tuvo_promo_gondola = item["promo"] != "Sin Promo"
             
             descuento_banco_teorico = 0.0
-            if conf["dcto_pct"] > 0:
+            pct_banco = conf["dcto_pct"]
+            if pct_banco > 0:
                 if conf["acumulable"]:
-                    descuento_banco_teorico = tot_cp * conf["dcto_pct"]
+                    descuento_banco_teorico = tot_cp * pct_banco
                 elif not tuvo_promo_gondola:
-                    descuento_banco_teorico = tot_sp * conf["dcto_pct"]
+                    descuento_banco_teorico = tot_sp * pct_banco
                     
             reintegro_consumido = sum(float(fila.get(f"Dcto Banco {i+1}", 0)) for fila in st.session_state.datos_alv)
             reintegro_disponible = max(0.0, conf["tope"] - reintegro_consumido)
@@ -292,6 +288,16 @@ if st.button("Calcular y Agregar a la Lista", type="primary"):
             
             ahorro_super = max((item["precio"] * cantidad) - total_final_bolsillo, 0.0)
 
+            # Lógica para detallar la promo usada
+            partes_promo = []
+            if tuvo_promo_gondola:
+                partes_promo.append(f"Góndola ({item['promo']})")
+            if descuento_banco_real > 0:
+                pct_str = f"{int(pct_banco*100)}%"
+                partes_promo.append(f"Banco {conf['medio']} ({pct_str})")
+            
+            texto_promo_usada = " + ".join(partes_promo) if partes_promo else "Sin Descuento"
+
             if total_final_bolsillo > 0 and total_final_bolsillo < mejor_precio_final:
                 mejor_precio_final = total_final_bolsillo
                 mejor_opcion_nombre = conf["nombre"]
@@ -299,10 +305,10 @@ if st.button("Calcular y Agregar a la Lista", type="primary"):
             fila_export.update({
                 f"Supermercado {i+1}": conf["nombre"],
                 f"Precio Base {i+1}": item["precio"],
-                f"Total Góndola {i+1}": tot_cp,
-                f"Dcto Banco {i+1}": descuento_banco_real,
                 f"Total FINAL {i+1}": total_final_bolsillo,
-                f"Ahorrado {i+1}": ahorro_super
+                f"Ahorrado {i+1}": ahorro_super,
+                f"Promo Usada {i+1}": texto_promo_usada,
+                f"Dcto Banco {i+1}": descuento_banco_real
             })
             
     ahorro_real = 0.0
@@ -339,7 +345,7 @@ if st.session_state.datos_alv:
         
         with cols_vista[idx]:
             st.markdown(f"### 🛒 {super_nombre}")
-            cols_to_keep = ["Producto", "Cantidad", f"Precio Base {i}", f"Total FINAL {i}", f"Ahorrado {i}"]
+            cols_to_keep = ["Producto", "Cantidad", f"Precio Base {i}", f"Total FINAL {i}", f"Ahorrado {i}", f"Promo Usada {i}"]
             cols_exist = [c for c in cols_to_keep if c in df.columns]
             
             if cols_exist:
@@ -347,7 +353,8 @@ if st.session_state.datos_alv:
                 mini_df.rename(columns={
                     f"Precio Base {i}": "Precio Base", 
                     f"Total FINAL {i}": "Precio Final",
-                    f"Ahorrado {i}": "Ahorrado"
+                    f"Ahorrado {i}": "Ahorrado",
+                    f"Promo Usada {i}": "Promo Usada"
                 }, inplace=True)
                 
                 st.dataframe(
