@@ -120,7 +120,7 @@ with st.sidebar:
     panel_administracion("promos_pago", "Descuentos de Pago (%)")
     panel_administracion("topes", "Topes de Reintegro ($)")
 
-# --- 4. CONFIGURACIÓN GLOBAL DE LA COMPRA (NUEVO) ---
+# --- 4. CONFIGURACIÓN GLOBAL DE LA COMPRA ---
 st.subheader("1️⃣ Configuración de Supermercados y Medios de Pago")
 st.caption("Definí dónde y cómo vas a pagar hoy. Estos descuentos se aplicarán automáticamente a cada producto.")
 
@@ -192,11 +192,9 @@ if st.button("Calcular y Agregar a la Lista", type="primary"):
     for i, item in enumerate(opciones_item):
         conf = config_super[i]
         if conf["nombre"] != "-":
-            # 1. Calculamos el precio según la promo del supermercado (Góndola)
             unit_cp, tot_sp, tot_cp = calcular_promo_producto(cantidad, item["precio"], item["promo"])
             tuvo_promo_gondola = item["promo"] != "Sin Promo"
             
-            # 2. Calculamos el descuento bancario aplicable a ESTE producto
             descuento_banco_teorico = 0.0
             if conf["dcto_pct"] > 0:
                 if conf["acumulable"]:
@@ -204,21 +202,16 @@ if st.button("Calcular y Agregar a la Lista", type="primary"):
                 elif not tuvo_promo_gondola:
                     descuento_banco_teorico = tot_sp * conf["dcto_pct"]
                     
-            # 3. Control de Tope de Reintegro Dinámico
-            # Sumamos cuánto reintegro ya gastamos en este súper en los productos anteriores
             reintegro_consumido = sum(float(fila.get(f"Dcto Banco {i+1}", 0)) for fila in st.session_state.datos_alv)
             reintegro_disponible = max(0.0, conf["tope"] - reintegro_consumido)
             
-            # Aplicamos solo lo que nos quede de tope
             descuento_banco_real = min(descuento_banco_teorico, reintegro_disponible)
             total_final_bolsillo = tot_cp - descuento_banco_real
             
-            # 4. Buscamos la verdadera mejor opción
             if total_final_bolsillo > 0 and total_final_bolsillo < mejor_precio_final:
                 mejor_precio_final = total_final_bolsillo
                 mejor_opcion_nombre = conf["nombre"]
                 
-            # Guardamos los datos
             fila_export.update({
                 f"Supermercado {i+1}": conf["nombre"],
                 f"Precio Base {i+1}": item["precio"],
@@ -227,8 +220,6 @@ if st.button("Calcular y Agregar a la Lista", type="primary"):
                 f"Total FINAL {i+1}": total_final_bolsillo
             })
             
-    # Calcular ahorro real comparando el mejor precio final vs el precio base sin NINGUNA promo
-    # (Tomamos el precio base de la mejor opción para hacer el cálculo de ahorro)
     ahorro_real = 0.0
     for i, item in enumerate(opciones_item):
         if config_super[i]["nombre"] == mejor_opcion_nombre:
@@ -258,7 +249,6 @@ if st.session_state.datos_alv:
         
         with cols_vista[idx]:
             st.markdown(f"### 🛒 {super_nombre}")
-            # Mostrar tabla resumen para el cuadro de este supermercado
             cols_to_keep = ["Producto", "Cantidad", f"Total Góndola {i}", f"Dcto Banco {i}", f"Total FINAL {i}"]
             cols_exist = [c for c in cols_to_keep if c in df.columns]
             
@@ -280,8 +270,6 @@ if st.session_state.datos_alv:
                 st.info(f"**Total a Pagar en {super_nombre}:** ${total_pagar_super:,.2f}")
 
     st.divider()
-    
-    # Cuadro Final: Producto vs Mejor Opción
     st.subheader("🏆 Resumen de Compras Inteligentes")
     st.caption("Acá te indica exactamente dónde comprar cada producto para gastar lo menos posible.")
     
@@ -299,6 +287,24 @@ if st.session_state.datos_alv:
     st.success(f"🔥 **AHORRO TOTAL LOGRADO:** ${ahorro_total:,.2f}")
     
     st.divider()
+    
+    # --- 7. EDICIÓN Y EXPORTACIÓN ---
+    st.subheader("✏️ Editar / Exportar Carrito")
+    
+    # Opcion para borrar item individual
+    opciones_borrar = [f"Fila {i+1}: {d['Producto']} ({d['Marca']})" for i, d in enumerate(st.session_state.datos_alv)]
+    c_sel, c_btn = st.columns([3, 1])
+    with c_sel:
+        item_a_borrar = st.selectbox("¿Cargaste algo mal? Seleccioná el producto para eliminarlo:", ["-"] + opciones_borrar)
+    with c_btn:
+        st.markdown("<br>", unsafe_allow_html=True) # Espacio para alinear el botón con el selectbox
+        if st.button("❌ Eliminar Producto Seleccionado"):
+            if item_a_borrar != "-":
+                idx = int(item_a_borrar.split(":")[0].replace("Fila ", "")) - 1
+                st.session_state.datos_alv.pop(idx)
+                st.rerun()
+
+    st.write("") # Espaciador
     
     @st.cache_data
     def convertir_df(df_exportar):
