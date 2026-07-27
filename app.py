@@ -208,6 +208,9 @@ if st.button("Calcular y Agregar a la Lista", type="primary"):
             descuento_banco_real = min(descuento_banco_teorico, reintegro_disponible)
             total_final_bolsillo = tot_cp - descuento_banco_real
             
+            # Calculamos lo ahorrado en este supermercado específico vs su propio precio base
+            ahorro_super = max((item["precio"] * cantidad) - total_final_bolsillo, 0.0)
+
             if total_final_bolsillo > 0 and total_final_bolsillo < mejor_precio_final:
                 mejor_precio_final = total_final_bolsillo
                 mejor_opcion_nombre = conf["nombre"]
@@ -217,17 +220,23 @@ if st.button("Calcular y Agregar a la Lista", type="primary"):
                 f"Precio Base {i+1}": item["precio"],
                 f"Total Góndola {i+1}": tot_cp,
                 f"Dcto Banco {i+1}": descuento_banco_real,
-                f"Total FINAL {i+1}": total_final_bolsillo
+                f"Total FINAL {i+1}": total_final_bolsillo,
+                f"Ahorrado {i+1}": ahorro_super
             })
             
+    # Datos de la mejor opción para la tabla final
     ahorro_real = 0.0
+    precio_base_mejor = 0.0
     for i, item in enumerate(opciones_item):
         if config_super[i]["nombre"] == mejor_opcion_nombre:
-            ahorro_real = (item["precio"] * cantidad) - mejor_precio_final
+            precio_base_mejor = item["precio"]
+            ahorro_real = max((item["precio"] * cantidad) - mejor_precio_final, 0.0)
             break
             
     fila_export["🏆 Mejor Opción"] = mejor_opcion_nombre
-    fila_export["💰 Ahorro Real"] = max(ahorro_real, 0.0)
+    fila_export["Precio Base Mejor"] = precio_base_mejor
+    fila_export["Precio Final Mejor"] = mejor_precio_final
+    fila_export["💰 Ahorro Real"] = ahorro_real
     
     st.session_state.datos_alv.append(fila_export)
     st.success("¡Producto agregado con inteligencia bancaria!")
@@ -237,7 +246,7 @@ if st.session_state.datos_alv:
     df = pd.DataFrame(st.session_state.datos_alv)
     
     st.divider()
-    st.subheader("📊 Análisis del Carrito")
+    st.subheader("📊 Análisis del Carrito por Supermercado")
     
     super_cols = [c for c in df.columns if re.match(r"Supermercado \d+", c)]
     num_supermercados_df = len(super_cols)
@@ -249,62 +258,82 @@ if st.session_state.datos_alv:
         
         with cols_vista[idx]:
             st.markdown(f"### 🛒 {super_nombre}")
-            cols_to_keep = ["Producto", "Cantidad", f"Total Góndola {i}", f"Dcto Banco {i}", f"Total FINAL {i}"]
+            cols_to_keep = ["Producto", "Cantidad", f"Precio Base {i}", f"Total FINAL {i}", f"Ahorrado {i}"]
             cols_exist = [c for c in cols_to_keep if c in df.columns]
             
             if cols_exist:
                 mini_df = df[cols_exist].copy()
-                mini_df.rename(columns={f"Total FINAL {i}": "A Pagar"}, inplace=True)
+                mini_df.rename(columns={
+                    f"Precio Base {i}": "Precio Base", 
+                    f"Total FINAL {i}": "Precio Final",
+                    f"Ahorrado {i}": "Ahorrado"
+                }, inplace=True)
                 
                 st.dataframe(
                     mini_df, 
                     hide_index=True, 
                     use_container_width=True, 
                     column_config={
-                        f"Total Góndola {i}": st.column_config.NumberColumn(format="$ %.2f"),
-                        f"Dcto Banco {i}": st.column_config.NumberColumn(format="-$ %.2f"),
-                        "A Pagar": st.column_config.NumberColumn(format="$ %.2f")
+                        "Precio Base": st.column_config.NumberColumn(format="$ %.2f"),
+                        "Precio Final": st.column_config.NumberColumn(format="$ %.2f"),
+                        "Ahorrado": st.column_config.NumberColumn(format="$ %.2f")
                     }
                 )
-                total_pagar_super = mini_df["A Pagar"].sum() if "A Pagar" in mini_df.columns else 0
-                st.info(f"**Total a Pagar en {super_nombre}:** ${total_pagar_super:,.2f}")
+                
+                # Subtotales de esta tarjeta
+                subtotal_base = (mini_df["Precio Base"] * mini_df["Cantidad"]).sum() if "Precio Base" in mini_df.columns else 0
+                subtotal_pagar = mini_df["Precio Final"].sum() if "Precio Final" in mini_df.columns else 0
+                subtotal_ahorrado = mini_df["Ahorrado"].sum() if "Ahorrado" in mini_df.columns else 0
+                
+                st.info(f"**Base Sin Promo:** ${subtotal_base:,.2f}  \n**Total a Pagar:** ${subtotal_pagar:,.2f}  \n**Ahorrado:** ${subtotal_ahorrado:,.2f}")
 
     st.divider()
     st.subheader("🏆 Resumen de Compras Inteligentes")
     st.caption("Acá te indica exactamente dónde comprar cada producto para gastar lo menos posible.")
     
-    resumen_df = df[["Marca", "Producto", "Cantidad", "🏆 Mejor Opción", "💰 Ahorro Real"]].copy()
+    resumen_df = df[["Producto", "Cantidad", "🏆 Mejor Opción", "Precio Base Mejor", "Precio Final Mejor", "💰 Ahorro Real"]].copy()
+    resumen_df.rename(columns={
+        "Precio Base Mejor": "Precio Base",
+        "Precio Final Mejor": "Precio Final",
+        "💰 Ahorro Real": "Ahorrado"
+    }, inplace=True)
+    
     st.dataframe(
         resumen_df, 
         hide_index=True, 
         use_container_width=True,
         column_config={
-            "💰 Ahorro Real": st.column_config.NumberColumn("Ahorro Logrado", format="$ %.2f")
+            "Precio Base": st.column_config.NumberColumn(format="$ %.2f"),
+            "Precio Final": st.column_config.NumberColumn(format="$ %.2f"),
+            "Ahorrado": st.column_config.NumberColumn(format="$ %.2f")
         }
     )
     
-    ahorro_total = df["💰 Ahorro Real"].sum()
-    st.success(f"🔥 **AHORRO TOTAL LOGRADO:** ${ahorro_total:,.2f}")
+    # Subtotales Finales (El Base se multiplica por cantidad para comparar el ticket real)
+    tot_base_res = (resumen_df["Precio Base"] * resumen_df["Cantidad"]).sum()
+    tot_final_res = resumen_df["Precio Final"].sum()
+    tot_ahorro_res = resumen_df["Ahorrado"].sum()
+    
+    st.success(f"🛒 **Total Base Original:** ${tot_base_res:,.2f} | 💳 **Total a Pagar:** ${tot_final_res:,.2f} | 🔥 **AHORRO TOTAL:** ${tot_ahorro_res:,.2f}")
     
     st.divider()
     
     # --- 7. EDICIÓN Y EXPORTACIÓN ---
     st.subheader("✏️ Editar / Exportar Carrito")
     
-    # Opcion para borrar item individual
     opciones_borrar = [f"Fila {i+1}: {d['Producto']} ({d['Marca']})" for i, d in enumerate(st.session_state.datos_alv)]
     c_sel, c_btn = st.columns([3, 1])
     with c_sel:
         item_a_borrar = st.selectbox("¿Cargaste algo mal? Seleccioná el producto para eliminarlo:", ["-"] + opciones_borrar)
     with c_btn:
-        st.markdown("<br>", unsafe_allow_html=True) # Espacio para alinear el botón con el selectbox
+        st.markdown("<br>", unsafe_allow_html=True) 
         if st.button("❌ Eliminar Producto Seleccionado"):
             if item_a_borrar != "-":
                 idx = int(item_a_borrar.split(":")[0].replace("Fila ", "")) - 1
                 st.session_state.datos_alv.pop(idx)
                 st.rerun()
 
-    st.write("") # Espaciador
+    st.write("") 
     
     @st.cache_data
     def convertir_df(df_exportar):
