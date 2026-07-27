@@ -18,8 +18,8 @@ ARCHIVO_SETUP = "setup_supermercados.json"
 
 def listas_por_defecto():
     return {
-        "marcas": ["Coca Cola", "Arcor", "Campanita", "Ayudin", "Cif", "Palmolive", "Carrefour", "Coto", "La Serenisima"],
-        "productos": ["Gaseosa 1.5 Lts", "Aceite 1.5 Lts", "Lavandina 1 Lt", "Rollo de cocina x 3", "Jabon Liquido 500ml", "Leche 1 Lt"],
+        "marcas": ["Coca Cola", "Arcor", "Campanita", "Ayudin", "Cif", "Palmolive", "Carrefour", "Coto", "La Serenisima", "Lucchetti"],
+        "productos": ["Gaseosa 1.5 Lts", "Aceite 1.5 Lts", "Lavandina 1 Lt", "Rollo de cocina x 3", "Jabon Liquido 500ml", "Leche 1 Lt", "Fideos tirabuzon N28 Lucchetti 500 g."],
         "supermercados": ["Coto", "Carrefour", "Jumbo", "Dia", "ChangoMas", "Disco"],
         "promociones": ["Sin Promo", "2do 80% Off", "2do 70% Off", "2do 50% Off", "3x2", "4x3", "2x1", "10% Off", "20% Off", "25% Off", "30% Off", "40% Off", "50% Off"],
         "promos_pago": ["0%", "15%", "20%", "25%", "30%", "35%", "40%"],
@@ -94,9 +94,17 @@ def extraer_numero(texto, default=0.0):
     nums = re.findall(r'\d+', str(texto).replace('.', ''))
     return float(nums[0]) if nums else default
 
+def limpiar_query_para_busqueda(prod_str):
+    """Limpia el nombre del producto para que la API de búsqueda lo encuentre sin errores"""
+    s = prod_str.lower()
+    s = re.sub(r'\b(g|kg|ml|lt|lts|cc|cm3|un|pack)\b', '', s)
+    s = re.sub(r'[\d\.,]+', '', s)
+    s = re.sub(r'[^a-záéíóúñ\s]', '', s)
+    palabras = [w for w in s.split() if len(w) > 2]
+    return " ".join(palabras[:3]) if palabras else prod_str
+
 # --- 2. MOTORES DE AUTOMATIZACIÓN (VTEX API & SCRAPING) ---
 def buscar_precio_vtex(supermercado, producto):
-    """Consulta la API oficial de VTEX para Carrefour y Día"""
     dominio = ""
     if "carrefour" in supermercado.lower():
         dominio = "www.carrefour.com.ar"
@@ -106,8 +114,9 @@ def buscar_precio_vtex(supermercado, producto):
     if not dominio:
         return 0.0
 
+    query_limpia = limpiar_query_para_busqueda(producto)
     try:
-        url = f"https://{dominio}/api/catalog_system/pub/products/search?ft={producto}"
+        url = f"https://{dominio}/api/catalog_system/pub/products/search?ft={query_limpia}"
         headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
         res = requests.get(url, headers=headers, timeout=5)
         if res.status_code == 200:
@@ -121,15 +130,14 @@ def buscar_precio_vtex(supermercado, producto):
     return 0.0
 
 def buscar_precio_coto(producto):
-    """Busca el precio en la web de Coto"""
     try:
-        query = producto.replace(" ", "+")
+        query_limpia = limpiar_query_para_busqueda(producto)
+        query = query_limpia.replace(" ", "+")
         url = f"https://www.coto.com.ar/sitios/coto/busqueda?Ntt={query}"
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         res = requests.get(url, headers=headers, timeout=6)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
-            # Buscar etiquetas de precio en Coto
             tag = soup.find(class_=re.compile("prec|price|f$", re.I))
             if tag:
                 texto = tag.get_text().replace('$', '').replace('.', '').replace(',', '.').strip()
@@ -287,21 +295,24 @@ with col_m: marca = st.selectbox("Marca", st.session_state.marcas)
 with col_p: producto = st.selectbox("Producto", st.session_state.productos)
 with col_c: cantidad = st.number_input("Cantidad", min_value=1, value=1, step=1)
 
-# Botón inteligente de búsqueda automática online
+# Botón inteligente de búsqueda automática online con actualización directa de Estado
 if st.button("🤖 Buscar Precios Online Automáticamente"):
     with st.spinner("Consultando APIs de Carrefour, Día y Coto..."):
         for i in range(st.session_state.num_opciones):
             sup_name = config_super[i]["nombre"]
             if sup_name != "-":
-                # Intentar buscar precio online automático
+                key_input_precio = f"p_base_{producto}_{i}"
                 precio_auto = obtener_precio_automatico(sup_name, producto)
+                
                 if precio_auto > 0:
-                    st.session_state[f"precio_auto_{i}"] = precio_auto
+                    st.session_state[key_input_precio] = precio_auto
                 else:
                     # Si no encuentra online, busca en el historial previo
                     hist = float(st.session_state.precios_historicos.get(producto, {}).get(sup_name, 0.0))
-                    st.session_state[f"precio_auto_{i}"] = hist
-        st.success("¡Búsqueda finalizada! Los precios online disponibles se han autocompletado.")
+                    if hist > 0:
+                        st.session_state[key_input_precio] = hist
+        st.success("¡Búsqueda finalizada! Precios actualizados en pantalla.")
+        st.rerun()
 
 cols_items = st.columns(st.session_state.num_opciones)
 opciones_item = []
@@ -313,19 +324,19 @@ if "Sin Promo" in lista_promos:
 
 for i in range(st.session_state.num_opciones):
     nombre_display = config_super[i]["nombre"] if config_super[i]["nombre"] != "-" else f"Opción {i+1}"
+    key_input_precio = f"p_base_{producto}_{i}"
     
-    # Obtener el precio automático si se ejecutó la búsqueda, sino el histórico
-    precio_defecto = float(st.session_state.get(f"precio_auto_{i}", st.session_state.precios_historicos.get(producto, {}).get(nombre_display, 0.0)))
-    
+    # Si la key no está en session_state, inicializar con el histórico
+    if key_input_precio not in st.session_state:
+        st.session_state[key_input_precio] = float(st.session_state.precios_historicos.get(producto, {}).get(nombre_display, 0.0))
+
     with cols_items[i]:
         st.markdown(f"**🛒 {nombre_display}**")
-        key_input_precio = f"p_base_{producto}_{i}"
         
         precio_base = st.number_input(
             f"Precio Base $", 
             min_value=0.0, 
             step=100.0, 
-            value=precio_defecto, 
             key=key_input_precio
         )
         promo = st.selectbox(f"Promo Góndola", lista_promos, key=f"p_promo_{i}")
