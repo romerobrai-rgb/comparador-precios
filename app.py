@@ -12,6 +12,7 @@ st.title("🛒 Comparador Inteligente de Precios")
 # --- 1. GESTIÓN DE DATOS (JSON y Session State) ---
 ARCHIVO_CONFIG = "config_opciones.json"
 ARCHIVO_CARRITO = "carrito_actual.json"
+ARCHIVO_SETUP = "setup_supermercados.json" # Nuevo: Guarda los supers y medios de pago elegidos arriba
 
 def listas_por_defecto():
     return {
@@ -57,6 +58,23 @@ def guardar_carrito(carrito_actual):
     with open(ARCHIVO_CARRITO, 'w', encoding='utf-8') as f:
         json.dump(carrito_actual, f, ensure_ascii=False, indent=4)
 
+def cargar_setup():
+    if os.path.exists(ARCHIVO_SETUP):
+        try:
+            with open(ARCHIVO_SETUP, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return None
+    return None
+
+def guardar_setup(num_opciones, setup_data):
+    data = {
+        "num_opciones": num_opciones,
+        "config_super": setup_data
+    }
+    with open(ARCHIVO_SETUP, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
 config_data = cargar_configuracion()
 
 for key, values in config_data.items():
@@ -66,8 +84,10 @@ for key, values in config_data.items():
 if "datos_alv" not in st.session_state:
     st.session_state.datos_alv = cargar_carrito()
 
+# Cargar setup guardado si existe, sino arrancar en 2
+saved_setup = cargar_setup()
 if "num_opciones" not in st.session_state:
-    st.session_state.num_opciones = 2
+    st.session_state.num_opciones = saved_setup["num_opciones"] if saved_setup else 2
 
 def extraer_numero(texto, default=0.0):
     nums = re.findall(r'\d+', str(texto).replace('.', ''))
@@ -106,7 +126,7 @@ def calcular_promo_producto(cantidad, precio, promo):
         
     return total_con_promo / cantidad, total_sin_promo, total_con_promo
 
-# --- 3. MENÚ LATERAL: ADMINISTRACIÓN ---
+# --- 3. MENÚ LATERAL: ADMINISTRACIÓN Y RESET ---
 def panel_administracion(clave, titulo):
     with st.expander(f"⚙️ {titulo}"):
         nuevo = st.text_input(f"Agregar {titulo}:", key=f"add_in_{clave}")
@@ -134,6 +154,16 @@ with st.sidebar:
     panel_administracion("medios_pago", "Medios de Pago")
     panel_administracion("promos_pago", "Descuentos de Pago (%)")
     panel_administracion("topes", "Topes de Reintegro ($)")
+    
+    st.divider()
+    st.warning("⚠️ Zona de Peligro")
+    if st.button("🔄 REINICIO TOTAL DE COMPRA"):
+        if os.path.exists(ARCHIVO_CARRITO): os.remove(ARCHIVO_CARRITO)
+        if os.path.exists(ARCHIVO_SETUP): os.remove(ARCHIVO_SETUP)
+        st.session_state.datos_alv = []
+        st.session_state.num_opciones = 2
+        st.success("¡Sistema reiniciado por completo!")
+        st.rerun()
 
 # --- 4. CONFIGURACIÓN GLOBAL DE LA COMPRA ---
 st.subheader("1️⃣ Configuración de Supermercados y Medios de Pago")
@@ -156,14 +186,31 @@ config_super = []
 cols_setup = st.columns(st.session_state.num_opciones)
 
 for i in range(st.session_state.num_opciones):
+    # Cargar valores guardados previamente si existen en el archivo de setup
+    saved_opt = saved_setup["config_super"][i] if saved_setup and "config_super" in saved_setup and i < len(saved_setup["config_super"]) else {}
+    
+    def_sup = saved_opt.get("nombre", "-")
+    def_med = saved_opt.get("medio", "-")
+    def_dcto = f"{int(saved_opt.get('dcto_pct', 0)*100)}%" if saved_opt.get('dcto_pct', 0) > 0 else "0%"
+    def_tope = str(int(saved_opt.get('tope', 0))) if saved_opt.get('tope', float('inf')) != float('inf') else "Sin Tope"
+    def_acum = saved_opt.get("acumulable", True)
+
     with cols_setup[i]:
         st.markdown(f"**Opción {i+1}**")
-        s_nombre = st.selectbox(f"Supermercado", ["-"] + st.session_state.supermercados, key=f"g_sup_{i}")
-        s_medio = st.selectbox(f"Medio de Pago", ["-"] + st.session_state.medios_pago, key=f"g_med_{i}")
+        
+        # Obtener índice por defecto para los selectbox
+        sup_idx = st.session_state.supermercados.index(def_sup) + 1 if def_sup in st.session_state.supermercados else 0
+        med_idx = st.session_state.medios_pago.index(def_med) + 1 if def_med in st.session_state.medios_pago else 0
+        dcto_idx = ["0%"] + st.session_state.promos_pago
+        dcto_select_idx = dcto_idx.index(def_dcto) if def_dcto in dcto_idx else 0
+        tope_idx = st.session_state.topes.index(def_tope) if def_tope in st.session_state.topes else 0
+
+        s_nombre = st.selectbox(f"Supermercado", ["-"] + st.session_state.supermercados, index=sup_idx, key=f"g_sup_{i}")
+        s_medio = st.selectbox(f"Medio de Pago", ["-"] + st.session_state.medios_pago, index=med_idx, key=f"g_med_{i}")
         c1, c2 = st.columns(2)
-        with c1: s_dcto = st.selectbox(f"Dcto %", ["0%"] + st.session_state.promos_pago, key=f"g_dcto_{i}")
-        with c2: s_tope = st.selectbox(f"Tope $", st.session_state.topes, key=f"g_tope_{i}")
-        s_acum = st.checkbox("Acumula con otras promos", value=True, key=f"g_acum_{i}")
+        with c1: s_dcto = st.selectbox(f"Dcto %", ["0%"] + st.session_state.promos_pago, index=dcto_select_idx, key=f"g_dcto_{i}")
+        with c2: s_tope = st.selectbox(f"Tope $", st.session_state.topes, index=tope_idx, key=f"g_tope_{i}")
+        s_acum = st.checkbox("Acumula con otras promos", value=def_acum, key=f"g_acum_{i}")
         
         config_super.append({
             "nombre": s_nombre,
@@ -172,6 +219,9 @@ for i in range(st.session_state.num_opciones):
             "tope": extraer_numero(s_tope, default=float('inf')) if "Sin Tope" not in str(s_tope) else float('inf'),
             "acumulable": s_acum
         })
+
+# Guardar setup automáticamente ante cualquier cambio
+guardar_setup(st.session_state.num_opciones, config_super)
 
 st.divider()
 
@@ -193,12 +243,10 @@ if "Sin Promo" in lista_promos:
 for i in range(st.session_state.num_opciones):
     nombre_display = config_super[i]["nombre"] if config_super[i]["nombre"] != "-" else f"Opción {i+1}"
     
-    # Buscamos el precio histórico específico para este producto y este supermercado
     precio_guardado = float(st.session_state.precios_historicos.get(producto, {}).get(nombre_display, 0.0))
     
     with cols_items[i]:
         st.markdown(f"**🛒 {nombre_display}**")
-        # Usamos una clave dinámica que cambia al cambiar de producto para forzar a Streamlit a actualizar el valor
         key_input_precio = f"p_base_{producto}_{i}"
         
         precio_base = st.number_input(
@@ -223,7 +271,6 @@ if st.button("Calcular y Agregar a la Lista", type="primary"):
     for i, item in enumerate(opciones_item):
         conf = config_super[i]
         if conf["nombre"] != "-":
-            # Guardamos el precio actualizado en la memoria histórica
             st.session_state.precios_historicos[producto][conf["nombre"]] = item["precio"]
             guardar_configuracion()
             
