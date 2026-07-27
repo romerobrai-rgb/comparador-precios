@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import json
 import os
+import re
 
 # Configuración inicial de la página
 st.set_page_config(page_title="Comparador de Precios", layout="wide")
@@ -38,7 +39,6 @@ for key in ["marcas", "productos", "supermercados"]:
 if "datos_alv" not in st.session_state:
     st.session_state.datos_alv = []
 
-# NUEVO: Controlar la cantidad de opciones (mínimo 2)
 if "num_opciones" not in st.session_state:
     st.session_state.num_opciones = 2
 
@@ -117,7 +117,6 @@ with col_c: cantidad = st.number_input("Cantidad", min_value=1, value=1, step=1)
 
 st.subheader("Comparativa por Supermercado")
 
-# Controles dinámicos para agregar/quitar opciones
 col_btn_add, col_btn_rem, _ = st.columns([2, 2, 6])
 with col_btn_add:
     if st.button("➕ Agregar Supermercado"):
@@ -131,7 +130,6 @@ with col_btn_rem:
         else:
             st.warning("Debe haber un mínimo de 2 opciones.")
 
-# Crear las columnas dinámicamente según la cantidad elegida
 cols_super = st.columns(st.session_state.num_opciones)
 opciones = []
 
@@ -163,7 +161,9 @@ if st.button("Calcular y Agregar a la Lista", type="primary"):
                 f"Precio Base {i+1}": op["precio"],
                 f"Unitario c/Promo {i+1}": unit_cp,
                 f"Total s/Promo {i+1}": tot_sp,
-                f"Total c/Promo {i+1}": tot_cp
+                f"Total c/Promo {i+1}": tot_cp,
+                # Flag invisible para saber si tuvo promo al calcular el medio de pago
+                f"Tuvo Promo {i+1}": op["promo"] != "Sin Promo" 
             })
             
     ahorro = max(mejor_sp - mejor_precio, 0.0) if mejor_precio != float('inf') else 0.0
@@ -178,35 +178,74 @@ if st.session_state.datos_alv:
     st.subheader("Lista de Compras Acumulada")
     df = pd.DataFrame(st.session_state.datos_alv)
     
-    # Configurar las columnas dinámicamente para darles formato de moneda
+    # Ocultar las columnas internas de "Tuvo Promo" para la vista de la tabla
+    cols_visibles = [c for c in df.columns if "Tuvo Promo" not in c]
+    df_visual = df[cols_visibles]
+    
     column_config = {}
-    for col in df.columns:
+    for col in df_visual.columns:
         if "Precio Base" in col:
-            # Cambiamos el nombre visual a "Precio Base" y agregamos formato $
             column_config[col] = st.column_config.NumberColumn("Precio Base", format="$ %.2f")
         elif any(kw in col for kw in ["Unitario", "Total", "Ahorro"]):
-            # Solo formato $ para las demás columnas de plata
             column_config[col] = st.column_config.NumberColumn(format="$ %.2f")
             
-    # Mostrar tabla limpia aplicando la configuración visual
-    st.dataframe(df, use_container_width=True, column_config=column_config)
+    st.dataframe(df_visual, use_container_width=True, column_config=column_config)
     
-    # Sumarizadores
-    ahorro_total = df["Ahorro Generado"].sum()
-    st.info(f"💰 **Ahorro Total Estimado:** ${ahorro_total:,.2f}")
+    # --- 6. DESCUENTOS BANCARIOS / MEDIOS DE PAGO ---
+    st.divider()
+    st.subheader("💳 Descuentos por Medio de Pago (Final del Carrito)")
     
-    @st.cache_data
-    def convertir_df(df):
-        return df.to_csv(index=False).encode('utf-8')
+    super_cols = [c for c in df.columns if re.match(r"Supermercado \d+", c)]
+    num_supermercados_df = len(super_cols)
+    cols_pagos = st.columns(num_supermercados_df)
+    
+    for idx, col_name in enumerate(super_cols):
+        i = idx + 1
+        # Obtener el nombre del super predominante en esa columna
+        super_nombre = df[col_name].mode()[0] if not df[col_name].dropna().empty else f"Opción {i}"
         
-    csv = convertir_df(df)
-    st.download_button(
-        label="📥 Descargar Lista (CSV para Excel)",
-        data=csv,
-        file_name='lista_de_compras.csv',
-        mime='text/csv',
-    )
+        with cols_pagos[idx]:
+            st.markdown(f"#### {super_nombre}")
+            desc_str = st.selectbox("Descuento Bancario:", ["0%", "15%", "20%", "30%"], key=f"desc_pago_{i}")
+            acumulable = st.checkbox("Acumula con otras promos", value=True, key=f"acum_{i}")
+            
+            porc = int(desc_str.replace("%", "")) / 100
+            
+            # Asegurar que las columnas existan antes de sumar
+            if f"Total c/Promo {i}" in df.columns and f"Tuvo Promo {i}" in df.columns:
+                total_bruto = df[f"Total c/Promo {i}"].fillna(0).sum()
+                items_sin_promo = df[df[f"Tuvo Promo {i}"] == False][f"Total c/Promo {i}"].fillna(0).sum()
+                
+                if acumulable:
+                    descuento = total_bruto * porc
+                else:
+                    descuento = items_sin_promo * porc
+                    
+                total_final = total_bruto - descuento
+                
+                st.write(f"Total Carrito: **${total_bruto:,.2f}**")
+                st.write(f"Descuento Extra: **-${descuento:,.2f}**")
+                st.success(f"**Total a Pagar: ${total_final:,.2f}**")
+            else:
+                st.info("Sin artículos")
+
+    st.divider()
+    # Exportar a Excel (Limpiando las columnas ocultas)
+    @st.cache_data
+    def convertir_df(df_limpio):
+        return df_limpio.to_csv(index=False).encode('utf-8')
+        
+    csv = convertir_df(df_visual)
     
-    if st.button("Borrar Lista Completa"):
-        st.session_state.datos_alv = []
-        st.rerun()
+    col_dl, col_del = st.columns(2)
+    with col_dl:
+        st.download_button(
+            label="📥 Descargar Lista (CSV para Excel)",
+            data=csv,
+            file_name='lista_de_compras.csv',
+            mime='text/csv',
+        )
+    with col_del:
+        if st.button("🗑️ Borrar Lista Completa"):
+            st.session_state.datos_alv = []
+            st.rerun()
