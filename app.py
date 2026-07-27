@@ -44,7 +44,6 @@ def guardar_configuracion():
 
 config_data = cargar_configuracion()
 
-# Inicializar listas en memoria
 for key, values in config_data.items():
     if key not in st.session_state:
         st.session_state[key] = sorted(values)
@@ -55,13 +54,12 @@ if "datos_alv" not in st.session_state:
 if "num_opciones" not in st.session_state:
     st.session_state.num_opciones = 2
 
-# Extraer número de un string
 def extraer_numero(texto, default=0.0):
     nums = re.findall(r'\d+', str(texto).replace('.', ''))
     return float(nums[0]) if nums else default
 
-# --- 2. LÓGICA DE CÁLCULO DE ARTÍCULOS ---
-def calcular_promo(cantidad, precio, promo):
+# --- 2. LÓGICA MATEMÁTICA DE PRODUCTOS ---
+def calcular_promo_producto(cantidad, precio, promo):
     if cantidad == 0 or precio == 0.0: return 0.0, 0.0, 0.0
     total_sin_promo = cantidad * precio
     
@@ -122,14 +120,9 @@ with st.sidebar:
     panel_administracion("promos_pago", "Descuentos de Pago (%)")
     panel_administracion("topes", "Topes de Reintegro ($)")
 
-# --- 4. INTERFAZ PRINCIPAL ---
-st.subheader("Ingreso de Datos")
-col_m, col_p, col_c = st.columns([1, 2, 1])
-with col_m: marca = st.selectbox("Marca", st.session_state.marcas)
-with col_p: producto = st.selectbox("Producto", st.session_state.productos)
-with col_c: cantidad = st.number_input("Cantidad", min_value=1, value=1, step=1)
-
-st.subheader("Comparativa por Supermercado")
+# --- 4. CONFIGURACIÓN GLOBAL DE LA COMPRA (NUEVO) ---
+st.subheader("1️⃣ Configuración de Supermercados y Medios de Pago")
+st.caption("Definí dónde y cómo vas a pagar hoy. Estos descuentos se aplicarán automáticamente a cada producto.")
 
 col_btn_add, col_btn_rem, _ = st.columns([2, 2, 6])
 with col_btn_add:
@@ -144,8 +137,38 @@ with col_btn_rem:
         else:
             st.warning("Debe haber un mínimo de 2 opciones.")
 
-cols_super = st.columns(st.session_state.num_opciones)
-opciones = []
+config_super = []
+cols_setup = st.columns(st.session_state.num_opciones)
+
+for i in range(st.session_state.num_opciones):
+    with cols_setup[i]:
+        st.markdown(f"**Opción {i+1}**")
+        s_nombre = st.selectbox(f"Supermercado", ["-"] + st.session_state.supermercados, key=f"g_sup_{i}")
+        s_medio = st.selectbox(f"Medio de Pago", ["-"] + st.session_state.medios_pago, key=f"g_med_{i}")
+        c1, c2 = st.columns(2)
+        with c1: s_dcto = st.selectbox(f"Dcto %", ["0%"] + st.session_state.promos_pago, key=f"g_dcto_{i}")
+        with c2: s_tope = st.selectbox(f"Tope $", st.session_state.topes, key=f"g_tope_{i}")
+        s_acum = st.checkbox("Acumula con otras promos", value=True, key=f"g_acum_{i}")
+        
+        config_super.append({
+            "nombre": s_nombre,
+            "medio": s_medio,
+            "dcto_pct": extraer_numero(s_dcto) / 100,
+            "tope": extraer_numero(s_tope, default=float('inf')) if "Sin Tope" not in str(s_tope) else float('inf'),
+            "acumulable": s_acum
+        })
+
+st.divider()
+
+# --- 5. INGRESO DE PRODUCTOS ---
+st.subheader("2️⃣ Carga de Productos")
+col_m, col_p, col_c = st.columns([1, 2, 1])
+with col_m: marca = st.selectbox("Marca", st.session_state.marcas)
+with col_p: producto = st.selectbox("Producto", st.session_state.productos)
+with col_c: cantidad = st.number_input("Cantidad", min_value=1, value=1, step=1)
+
+cols_items = st.columns(st.session_state.num_opciones)
+opciones_item = []
 
 lista_promos = st.session_state.promociones.copy()
 if "Sin Promo" in lista_promos:
@@ -153,50 +176,77 @@ if "Sin Promo" in lista_promos:
     lista_promos.insert(0, "Sin Promo")
 
 for i in range(st.session_state.num_opciones):
-    with cols_super[i]:
-        st.markdown(f"**Opción {i+1}**")
-        superm = st.selectbox(f"Supermercado {i+1}", ["-"] + st.session_state.supermercados, index=0, key=f"sup_{i}")
-        precio_base = st.number_input(f"Precio Base $", min_value=0.0, step=100.0, key=f"precio_{i}")
-        promo = st.selectbox(f"Promoción", lista_promos, key=f"promo_{i}")
-        opciones.append({"super": superm, "precio": precio_base, "promo": promo})
+    nombre_display = config_super[i]["nombre"] if config_super[i]["nombre"] != "-" else f"Opción {i+1}"
+    with cols_items[i]:
+        st.markdown(f"**🛒 {nombre_display}**")
+        precio_base = st.number_input(f"Precio Base $", min_value=0.0, step=100.0, key=f"p_base_{i}")
+        promo = st.selectbox(f"Promo Góndola", lista_promos, key=f"p_promo_{i}")
+        opciones_item.append({"precio": precio_base, "promo": promo})
 
 if st.button("Calcular y Agregar a la Lista", type="primary"):
-    mejor_precio = float('inf')
-    mejor_opcion = "-"
-    mejor_sp = 0.0
+    mejor_precio_final = float('inf')
+    mejor_opcion_nombre = "-"
     
     fila_export = {"Marca": marca, "Producto": producto, "Cantidad": cantidad}
     
-    for i, op in enumerate(opciones):
-        if op["super"] != "-":
-            unit_cp, tot_sp, tot_cp = calcular_promo(cantidad, op["precio"], op["promo"])
-            if tot_cp > 0 and tot_cp < mejor_precio:
-                mejor_precio = tot_cp
-                mejor_opcion = op["super"]
-                mejor_sp = tot_sp
+    for i, item in enumerate(opciones_item):
+        conf = config_super[i]
+        if conf["nombre"] != "-":
+            # 1. Calculamos el precio según la promo del supermercado (Góndola)
+            unit_cp, tot_sp, tot_cp = calcular_promo_producto(cantidad, item["precio"], item["promo"])
+            tuvo_promo_gondola = item["promo"] != "Sin Promo"
+            
+            # 2. Calculamos el descuento bancario aplicable a ESTE producto
+            descuento_banco_teorico = 0.0
+            if conf["dcto_pct"] > 0:
+                if conf["acumulable"]:
+                    descuento_banco_teorico = tot_cp * conf["dcto_pct"]
+                elif not tuvo_promo_gondola:
+                    descuento_banco_teorico = tot_sp * conf["dcto_pct"]
+                    
+            # 3. Control de Tope de Reintegro Dinámico
+            # Sumamos cuánto reintegro ya gastamos en este súper en los productos anteriores
+            reintegro_consumido = sum(float(fila.get(f"Dcto Banco {i+1}", 0)) for fila in st.session_state.datos_alv)
+            reintegro_disponible = max(0.0, conf["tope"] - reintegro_consumido)
+            
+            # Aplicamos solo lo que nos quede de tope
+            descuento_banco_real = min(descuento_banco_teorico, reintegro_disponible)
+            total_final_bolsillo = tot_cp - descuento_banco_real
+            
+            # 4. Buscamos la verdadera mejor opción
+            if total_final_bolsillo > 0 and total_final_bolsillo < mejor_precio_final:
+                mejor_precio_final = total_final_bolsillo
+                mejor_opcion_nombre = conf["nombre"]
                 
+            # Guardamos los datos
             fila_export.update({
-                f"Supermercado {i+1}": op["super"],
-                f"Precio Base {i+1}": op["precio"],
-                f"Unitario c/Promo {i+1}": unit_cp,
-                f"Total s/Promo {i+1}": tot_sp,
-                f"Total c/Promo {i+1}": tot_cp,
-                f"Tuvo Promo {i+1}": op["promo"] != "Sin Promo" 
+                f"Supermercado {i+1}": conf["nombre"],
+                f"Precio Base {i+1}": item["precio"],
+                f"Total Góndola {i+1}": tot_cp,
+                f"Dcto Banco {i+1}": descuento_banco_real,
+                f"Total FINAL {i+1}": total_final_bolsillo
             })
             
-    ahorro = max(mejor_sp - mejor_precio, 0.0) if mejor_precio != float('inf') else 0.0
-    fila_export["Mejor Opción"] = mejor_opcion
-    fila_export["Ahorro Producto"] = ahorro
+    # Calcular ahorro real comparando el mejor precio final vs el precio base sin NINGUNA promo
+    # (Tomamos el precio base de la mejor opción para hacer el cálculo de ahorro)
+    ahorro_real = 0.0
+    for i, item in enumerate(opciones_item):
+        if config_super[i]["nombre"] == mejor_opcion_nombre:
+            ahorro_real = (item["precio"] * cantidad) - mejor_precio_final
+            break
+            
+    fila_export["🏆 Mejor Opción"] = mejor_opcion_nombre
+    fila_export["💰 Ahorro Real"] = max(ahorro_real, 0.0)
     
     st.session_state.datos_alv.append(fila_export)
-    st.success("¡Producto agregado!")
+    st.success("¡Producto agregado con inteligencia bancaria!")
 
-# --- 5. VISUALIZADOR Y EXPORTACIÓN (NUEVO FORMATO DE CUADROS) ---
+# --- 6. VISUALIZADOR Y EXPORTACIÓN ---
 if st.session_state.datos_alv:
     df = pd.DataFrame(st.session_state.datos_alv)
     
     st.divider()
-    st.subheader("📊 Análisis por Supermercado")
+    st.subheader("📊 Análisis del Carrito")
     
     super_cols = [c for c in df.columns if re.match(r"Supermercado \d+", c)]
     num_supermercados_df = len(super_cols)
@@ -207,105 +257,61 @@ if st.session_state.datos_alv:
         super_nombre = df[col_name].mode()[0] if not df[col_name].dropna().empty else f"Opción {i}"
         
         with cols_vista[idx]:
-            # Construimos un mini cuadro para este supermercado
             st.markdown(f"### 🛒 {super_nombre}")
-            cols_to_keep = ["Producto", "Cantidad", f"Precio Base {i}", f"Total c/Promo {i}"]
+            # Mostrar tabla resumen para el cuadro de este supermercado
+            cols_to_keep = ["Producto", "Cantidad", f"Total Góndola {i}", f"Dcto Banco {i}", f"Total FINAL {i}"]
             cols_exist = [c for c in cols_to_keep if c in df.columns]
             
             if cols_exist:
                 mini_df = df[cols_exist].copy()
-                mini_df.rename(columns={f"Precio Base {i}": "Base", f"Total c/Promo {i}": "Total"}, inplace=True)
+                mini_df.rename(columns={f"Total FINAL {i}": "A Pagar"}, inplace=True)
                 
-                # Renderiza la tablita individual limpia y sin el número de fila (hide_index)
                 st.dataframe(
                     mini_df, 
                     hide_index=True, 
                     use_container_width=True, 
                     column_config={
-                        "Base": st.column_config.NumberColumn(format="$ %.2f"),
-                        "Total": st.column_config.NumberColumn(format="$ %.2f")
+                        f"Total Góndola {i}": st.column_config.NumberColumn(format="$ %.2f"),
+                        f"Dcto Banco {i}": st.column_config.NumberColumn(format="-$ %.2f"),
+                        "A Pagar": st.column_config.NumberColumn(format="$ %.2f")
                     }
                 )
-                total_super = mini_df["Total"].sum() if "Total" in mini_df.columns else 0
-                st.info(f"**Subtotal:** ${total_super:,.2f}")
+                total_pagar_super = mini_df["A Pagar"].sum() if "A Pagar" in mini_df.columns else 0
+                st.info(f"**Total a Pagar en {super_nombre}:** ${total_pagar_super:,.2f}")
 
     st.divider()
     
     # Cuadro Final: Producto vs Mejor Opción
-    st.subheader("🏆 Resumen de Mejor Opción por Producto")
+    st.subheader("🏆 Resumen de Compras Inteligentes")
+    st.caption("Acá te indica exactamente dónde comprar cada producto para gastar lo menos posible.")
     
-    resumen_df = df[["Marca", "Producto", "Cantidad", "Mejor Opción", "Ahorro Producto"]].copy()
+    resumen_df = df[["Marca", "Producto", "Cantidad", "🏆 Mejor Opción", "💰 Ahorro Real"]].copy()
     st.dataframe(
         resumen_df, 
         hide_index=True, 
         use_container_width=True,
         column_config={
-            "Ahorro Producto": st.column_config.NumberColumn("Ahorro Producto", format="$ %.2f")
+            "💰 Ahorro Real": st.column_config.NumberColumn("Ahorro Logrado", format="$ %.2f")
         }
     )
     
-    ahorro_total = df["Ahorro Producto"].sum()
-    st.success(f"💰 **Ahorro Total Estimado (sin tarjetas):** ${ahorro_total:,.2f}")
+    ahorro_total = df["💰 Ahorro Real"].sum()
+    st.success(f"🔥 **AHORRO TOTAL LOGRADO:** ${ahorro_total:,.2f}")
     
-    # --- 6. DESCUENTOS BANCARIOS / MEDIOS DE PAGO ---
     st.divider()
-    st.subheader("💳 Calculadora de Pagos (Final del Carrito)")
-    
-    cols_pagos = st.columns(num_supermercados_df)
-    
-    for idx, col_name in enumerate(super_cols):
-        i = idx + 1
-        super_nombre = df[col_name].mode()[0] if not df[col_name].dropna().empty else f"Opción {i}"
-        
-        with cols_pagos[idx]:
-            st.markdown(f"#### {super_nombre}")
-            st.selectbox("Medio de Pago:", ["-"] + st.session_state.medios_pago, key=f"medio_pago_{i}")
-            
-            c1, c2 = st.columns(2)
-            with c1: desc_str = st.selectbox("Dcto Banco:", ["0%"] + st.session_state.promos_pago, key=f"desc_pago_{i}")
-            with c2: tope_str = st.selectbox("Tope $:", st.session_state.topes, key=f"tope_{i}")
-            
-            acumulable = st.checkbox("Acumula con otras promos", value=True, key=f"acum_{i}")
-            
-            porc_descuento = extraer_numero(desc_str) / 100
-            tope_reintegro = extraer_numero(tope_str, default=float('inf')) if "Sin Tope" not in str(tope_str) else float('inf')
-            
-            if f"Total c/Promo {i}" in df.columns and f"Tuvo Promo {i}" in df.columns:
-                total_bruto = df[f"Total c/Promo {i}"].fillna(0).sum()
-                items_sin_promo = df[df[f"Tuvo Promo {i}"] == False][f"Total c/Promo {i}"].fillna(0).sum()
-                
-                if acumulable:
-                    descuento_calculado = total_bruto * porc_descuento
-                else:
-                    descuento_calculado = items_sin_promo * porc_descuento
-                
-                descuento_final = min(descuento_calculado, tope_reintegro)
-                total_a_pagar = total_bruto - descuento_final
-                
-                st.write(f"Total Bruto: **${total_bruto:,.2f}**")
-                st.write(f"Reintegro Bancario: **-${descuento_final:,.2f}**")
-                st.success(f"🔥 **Total Final a Pagar: ${total_a_pagar:,.2f}**")
-            else:
-                st.info("Sin artículos cargados")
-
-    st.divider()
-    
-    # Exportación (El DataFrame crudo, para que Excel tenga todas las columnas)
-    cols_visibles_export = [c for c in df.columns if "Tuvo Promo" not in c]
-    df_export = df[cols_visibles_export]
     
     @st.cache_data
-    def convertir_df(df_limpio):
-        return df_limpio.to_csv(index=False).encode('utf-8')
+    def convertir_df(df_exportar):
+        return df_exportar.to_csv(index=False).encode('utf-8')
         
-    csv = convertir_df(df_export)
+    csv = convertir_df(df)
     
     col_dl, col_del = st.columns(2)
     with col_dl:
         st.download_button(
-            label="📥 Descargar Análisis Completo (CSV para Excel)",
+            label="📥 Descargar Análisis Completo (Excel)",
             data=csv,
-            file_name='analisis_supermercados.csv',
+            file_name='analisis_inteligente_compras.csv',
             mime='text/csv',
         )
     with col_del:
